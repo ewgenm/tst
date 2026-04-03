@@ -1,0 +1,730 @@
+# 📘 ТЕХНИЧЕСКОЕ ЗАДАНИЕ №0 (v1.4 + HOTFIX)
+## API CONTRACT & DATA STRUCTURES (FINAL GOLD MASTER)
+
+**Проект:** TaskSync Team  
+**Версия:** 1.4 (FINAL) ✅  
+**Дата:** 03.04.2026  
+**Локальная среда:** Laravel Herd + PostgreSQL 16+  
+**Домен разработки:** `http://tst.test`
+
+> ⚠️ **Это единственный источник правды.** Любые изменения должны быть согласованы и задокументированы здесь перед реализацией.
+
+---
+
+## 1. ОБЩИЕ ПРАВИЛА API
+
+### 1.1. Базовый URL
+*   **Production:** `https://api.tasksync.team/api/v1`
+*   **Local (Herd):** `http://tst.test/api/v1`
+
+### 1.2. Формат ответов
+**Успех (200/201):**
+```json
+{
+  "success": true,
+  "data": { ... },
+  "meta": { "timestamp": "2026-04-03T10:00:00Z" }
+}
+```
+
+**Пагинация:**
+```json
+{
+  "success": true,
+  "data": [ ... ],
+  "pagination": {
+    "current_page": 1,
+    "per_page": 20,
+    "total": 150,
+    "total_pages": 8,
+    "has_more": true
+  }
+}
+```
+
+**Ошибка (4xx/5xx):**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Поле title обязательно"
+  }
+}
+```
+
+### 1.3. Аутентификация и CORS
+*   **Метод:** Laravel Sanctum (SPA Authentication via cookies).
+*   **CORS:** `allowed_origins: ['http://tst.test', 'http://localhost:3000']`.
+*   **CSRF:** Включен, токен передаётся через заголовок `X-XSRF-TOKEN`.
+
+### 1.4. Rate Limiting Headers
+Все ответы включают заголовки:
+```
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 95
+X-RateLimit-Reset: 1680516000
+```
+
+---
+
+## 2. СТРУКТУРЫ ДАННЫХ (ENTITIES)
+
+### 2.1. User
+```typescript
+interface User {
+  id: number;
+  name: string;
+  email: string;
+  avatar_url: string | null;
+  timezone: string; // "Europe/Moscow"
+  locale: string; // "ru"
+  theme: 'light' | 'dark' | 'system';
+  created_at: string;
+}
+```
+
+### 2.2. Project
+```typescript
+interface Project {
+  id: number;
+  owner_id: number; // FK to User (Единственный владелец)
+  name: string;
+  description: string | null; // ← HOTFIX: добавлено поле
+  color: string; // Hex
+  icon: string | null;
+  is_favorite: boolean;
+  is_archived: boolean;
+  sort_order: number; // Для пользовательской сортировки списка проектов
+  tasks_count?: number; // Computed via withCount()
+  owner?: User; // Included via ?include=owner
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null; // Soft Delete
+}
+```
+
+### 2.3. Task
+```typescript
+interface Task {
+  id: number;
+  project_id: number | null; // Null = Inbox
+  parent_task_id: number | null; // Subtask (cascade delete)
+  title: string;
+  description: string | null;
+  status: 'todo' | 'in_progress' | 'review' | 'done';
+  priority: 'low' | 'medium' | 'high' | 'urgent';
+  due_at: string | null; // ISO 8601 UTC (e.g., "2026-04-10T18:00:00Z")
+  position: number; // Sort order within project/status
+  assignee_id: number | null;
+  created_by: number;
+  is_recurring: boolean;
+  recurring_rule: string | null; // e.g., "FREQ=DAILY"
+  
+  // Computed aggregates (via withCount/withSum)
+  comments_count?: number;
+  attachments_count?: number;
+  subtasks_completed?: number;
+  subtasks_total?: number;
+  
+  // Relations (included via ?include=...)
+  project?: Project;
+  assignee?: User;
+  tags?: Tag[];
+  attachments?: Attachment[];
+  subtasks?: Task[]; // Nested subtasks
+  
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+```
+
+### 2.4. Comment
+```typescript
+interface Comment {
+  id: number;
+  task_id: number;
+  user_id: number;
+  parent_comment_id: number | null; // For replies
+  content: string; // Markdown
+  attachments?: Attachment[]; // Included via ?include=attachments
+  
+  user?: User;
+  replies_count?: number; // Computed via withCount('replies')
+  
+  created_at: string;
+  updated_at: string;
+}
+```
+
+### 2.5. Tag
+```typescript
+interface Tag {
+  id: number;
+  user_id: number; // Owner of the tag
+  project_id: number | null; // Null = global personal tag
+  name: string;
+  color: string; // Hex
+  created_at: string;
+  updated_at: string;
+}
+```
+
+### 2.6. Attachment (Polymorphic)
+```typescript
+interface Attachment {
+  id: number;
+  attachable_type: 'App\\Models\\Task' | 'App\\Models\\Comment';
+  attachable_id: number;
+  user_id: number;
+  filename: string;
+  url: string;
+  mime_type: string;
+  size: number;
+  created_at: string;
+}
+```
+
+### 2.7. Habit
+```typescript
+interface Habit {
+  id: number;
+  user_id: number;
+  name: string;
+  color: string;
+  icon: string | null;
+  frequency: 'daily' | 'weekly' | 'custom';
+  target_days: number[]; // [0,1,2,3,4,5,6] where 0=Sunday. Example: [1,2,3,4,5] = Mon-Fri
+  current_streak: number;
+  best_streak: number;
+  last_completed_at: string | null;
+  completions_count?: number;
+  created_at: string;
+  updated_at: string;
+}
+```
+
+### 2.8. Notification
+```typescript
+interface Notification {
+  id: number;
+  user_id: number;
+  type: 'task_assigned' | 'task_due_soon' | 'comment_added' | 'project_invite';
+  title: string;
+  message: string;
+  data: Record<string, any>; // ← HOTFIX: добавлено имя поля
+  is_read: boolean;
+  read_at: string | null;
+  created_at: string;
+}
+```
+
+### 2.9. ProjectMember
+```typescript
+interface ProjectMember {
+  id: number;
+  project_id: number;
+  user_id: number;
+  role: 'admin' | 'member' | 'viewer'; // No 'owner'
+  status: 'pending' | 'active'; // For invites
+  invited_by: number | null;
+  invited_at?: string; // ← HOTFIX: добавлено для полноты
+  user?: User;
+}
+```
+
+---
+
+## 3. API ENDPOINTS (FULL LIST)
+
+### 3.1. Auth & Profile
+```
+POST   /auth/register
+POST   /auth/login
+POST   /auth/logout
+GET    /auth/me
+PUT    /auth/me
+```
+
+### 3.2. Dashboard & Search
+```
+GET    /dashboard/stats       // Tasks by status, overdue, habits streak
+GET    /search?q=...&types=tasks,projects,habits
+GET    /health                // Returns { "status": "ok", "services": { "db": "up", "redis": "up" } }
+```
+
+### 3.3. Tasks
+```
+GET    /tasks                 // Filter: project_id, status, assignee_id, search, sort, archived
+POST   /tasks
+GET    /tasks/{id}            // ?include=project,assignee,tags,attachments,subtasks
+PUT    /tasks/{id}
+DELETE /tasks/{id}            // Soft delete
+POST   /tasks/{id}/restore
+POST   /tasks/{id}/complete   // Handles recurring logic
+PUT    /tasks/{id}/position   // Body: { "position": 5 } or { "after_id": 123 }
+
+# Task Relations
+POST   /tasks/{id}/tags/{tagId}
+DELETE /tasks/{id}/tags/{tagId}
+POST   /tasks/{id}/attachments
+GET    /tasks/{id}/attachments
+DELETE /attachments/{id}
+
+# Comments
+GET    /tasks/{id}/comments
+POST   /tasks/{id}/comments
+GET    /comments/{id}         // ?include=attachments,replies
+PUT    /comments/{id}
+DELETE /comments/{id}
+GET    /comments/{id}/attachments
+POST   /comments/{id}/attachments
+```
+
+### 3.4. Projects
+```
+GET    /projects?archived=false&sort=sort_order
+POST   /projects
+PUT    /projects/{id}
+DELETE /projects/{id}         // Soft delete
+POST   /projects/{id}/restore
+POST   /projects/{id}/archive
+
+# Members & Invites (using ProjectMember with status=pending)
+GET    /projects/{id}/members
+POST   /projects/{id}/invite           // Body: { "email": "...", "role": "member" }
+PATCH  /project-members/{id}/accept    // Changes status: pending → active
+DELETE /project-members/{id}           // Decline invite or remove member
+DELETE /projects/{id}/leave            // Current user leaves
+```
+
+### 3.5. Habits
+```
+GET    /habits
+POST   /habits
+PUT    /habits/{id}
+DELETE /habits/{id}
+POST   /habits/{id}/log
+GET    /habits/{id}/stats
+```
+
+### 3.6. Tags
+```
+GET    /tags?project_id=15
+POST   /tags
+PUT    /tags/{id}
+DELETE /tags/{id}
+```
+
+### 3.7. Notifications
+```
+GET    /notifications
+PUT    /notifications/{id}/read
+PUT    /notifications/read-all
+GET    /notifications/unread-count
+```
+
+### 3.8. Integrations & AI
+```
+GET    /integrations
+POST   /integrations/{provider}/connect
+DELETE /integrations/{provider}/disconnect
+POST   /ai/generate-subtasks
+POST   /ai/suggest-plan
+```
+
+### 3.9. Export/Import
+```
+GET    /projects/{id}/export?format=json|csv
+POST   /import
+```
+
+---
+
+## 4. БИЗНЕС-ЛОГИКА
+
+### 4.1. Inbox Logic
+*   `Inbox` — это фильтр: `project_id IS NULL AND status != 'done' AND deleted_at IS NULL`.
+
+### 4.2. Recurring Tasks (MVP)
+*   **Триггер:** При `POST /tasks/{id}/complete`.
+*   **Логика:** Если `is_recurring = true`, создаётся копия задачи со статусом `todo` и новым `due_at` (сдвиг по правилу `recurring_rule`).
+
+### 4.3. Timezones
+*   **Backend:** Хранит `due_at` в **UTC**.
+*   **Frontend:** Конвертирует UTC ↔ Local на основе `user.timezone`.
+*   **Валидация:** `nullable|date` (Laravel автоматически парсит ISO 8601).
+
+### 4.4. Sorting
+*   **Tasks:** Поле `position` (integer). Обновление через `PUT /tasks/{id}/position` с телом `{ "position": 5 }` или `{ "after_id": 123 }`.
+*   **Projects:** Поле `sort_order` в таблице `projects` (user-specific ordering).
+
+### 4.5. Aggregates (Computed Fields)
+*   `comments_count`, `attachments_count`, `subtasks_total`, `subtasks_completed`, `replies_count` — вычисляются через Eloquent `withCount()` / `withSum()`. Не хранятся в БД.
+
+---
+
+## 5. ACL (ACCESS CONTROL MATRIX)
+
+> **Примечание:** Владелец проекта (`projects.owner_id`) — отдельная сущность, не входящая в `project_members`. Владелец имеет **все права Admin + эксклюзивное право удалить проект**. Права Owner и Admin могут дублироваться — это намеренно для наглядности.
+
+| Действие | Owner* | Admin | Member | Viewer | Author** |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Проект: Удалить/Архив** | ✅ | ❌ | ❌ | ❌ | - |
+| **Проект: Пригласить/Удалить** | ✅ | ✅ | ❌ | ❌ | - |
+| **Задача: Создать** | ✅ | ✅ | ✅ | ❌ | - |
+| **Задача: Редактировать Свою** | ✅ | ✅ | ✅ | ❌ | ✅ |
+| **Задача: Редактировать Чужую** | ✅ | ✅ | ❌ | ❌ | - |
+| **Коммент: Создать** | ✅ | ✅ | ✅ | ❌ | - |
+| **Коммент: Удалить Свой** | ✅ | ✅ | ✅ | ❌ | ✅ |
+| **Коммент: Удалить Чужой** | ✅ | ✅ | ❌ | ❌ | - |
+| **Тег: Управление** | ✅ | ✅ | ❌ | ❌ | - |
+| **Вложение: Загрузить** | ✅ | ✅ | ✅ | ❌ | - |
+| **Просмотр (Read)** | ✅ | ✅ | ✅ | ✅ | - |
+
+\* **Owner**: `projects.owner_id === auth()->id()`  
+\** **Author**: `task.created_by === auth()->id()` или `comment.user_id === auth()->id()`
+
+---
+
+## 6. ВАЛИДАЦИЯ (KEY RULES)
+
+### 6.1. Task
+```php
+[
+    'title' => 'required|string|max:255',
+    'description' => 'nullable|string|max:10000',
+    'project_id' => 'nullable|exists:projects,id',
+    'status' => 'required|in:todo,in_progress,review,done',
+    'priority' => 'required|in:low,medium,high,urgent',
+    'due_at' => 'nullable|date', // Accepts any ISO 8601, stored as UTC
+    'assignee_id' => 'nullable|exists:users,id',
+    'tags' => 'nullable|array',
+    'tags.*' => 'exists:tags,id',
+]
+```
+
+### 6.2. Project
+```php
+[
+    'name' => 'required|string|max:100',
+    'description' => 'nullable|string|max:1000',
+    'color' => 'nullable|regex:/^#[0-9A-F]{6}$/i',
+    'sort_order' => 'nullable|integer',
+]
+```
+
+### 6.3. Comment
+```php
+[
+    'content' => 'required|string|max:5000',
+    'parent_comment_id' => 'nullable|exists:comments,id',
+]
+```
+
+### 6.4. Attachment
+```php
+[
+    'file' => 'required|file|max:10240|mimes:jpg,png,pdf,doc,docx,xls,xlsx,zip',
+]
+```
+
+### 6.5. Invite Member
+```php
+[
+    'email' => 'required|email|exists:users,email', // или 'user_id'
+    'role' => 'required|in:admin,member,viewer',
+]
+```
+
+---
+
+## 7. ПАГИНАЦИЯ И ФИЛЬТРАЦИЯ
+
+### 7.1. Стандартные параметры
+```
+?page=1&per_page=20
+&sort=due_at&order=asc
+&search=keyword
+&include=project,assignee,tags,attachments,subtasks
+```
+
+### 7.2. Фильтры для задач
+```
+project_id=15
+status=todo,in_progress
+assignee_id=3
+priority=high,urgent
+due_at_from=2026-04-01T00:00:00Z
+due_at_to=2026-04-30T23:59:59Z
+archived=true  // для soft-deleted
+```
+
+### 7.3. Фильтры для проектов
+```
+?archived=false&sort=sort_order&order=asc
+```
+
+---
+
+## 8. WEBSOCKET EVENTS
+
+### 8.1. Каналы
+*   `private-user.{userId}` (Notifications)
+*   `private-project.{projectId}` (Task/Comment updates)
+
+### 8.2. Авторизация
+*   Laravel Broadcast Auth (`/broadcasting/auth`).
+*   Policy check: пользователь должен быть участником проекта (`project_members`) или владельцем (`projects.owner_id`).
+
+### 8.3. События
+```typescript
+'task.created': { task: Task, project_id: number }
+'task.updated': { task: Task, changes: string[], project_id: number }
+'task.deleted': { task_id: number, project_id: number }
+'task.assigned': { task: Task, assignee_id: number, assigned_by: number }
+'comment.created': { comment: Comment, task_id: number, project_id: number }
+'project.member.added': { user: User, project_id: number, role: string }
+'notification.new': { notification: Notification }
+```
+
+---
+
+## 9. ERROR CODES
+
+```typescript
+// Auth
+'AUTH_INVALID_CREDENTIALS'
+'AUTH_EMAIL_NOT_VERIFIED'
+'AUTH_TOKEN_EXPIRED'
+
+// Permissions
+'FORBIDDEN_PROJECT_ACCESS'
+'FORBIDDEN_TASK_ACCESS'
+'NOT_PROJECT_OWNER'
+'NOT_PROJECT_ADMIN'
+
+// Not Found
+'TASK_NOT_FOUND'
+'PROJECT_NOT_FOUND'
+'USER_NOT_FOUND'
+'COMMENT_NOT_FOUND'
+'ATTACHMENT_NOT_FOUND'
+
+// Validation & Business Logic
+'VALIDATION_ERROR'
+'CANNOT_DELETE_OWNER'
+'TASK_ALREADY_COMPLETED'
+'INVALID_RECURRING_RULE'
+'INVITE_ALREADY_EXISTS'
+'USER_NOT_INVITED'
+
+// Rate Limiting
+'RATE_LIMIT_EXCEEDED'
+```
+
+---
+
+## 10. RATE LIMITING
+
+| Endpoint / Group | Limit | Window |
+| :--- | :--- | :--- |
+| API Requests (general) | 100 req | 1 minute |
+| File Uploads | 10 uploads | 1 minute |
+| AI Endpoints | 20 req | 1 hour |
+| Auth Attempts | 5 attempts | 1 minute |
+| Search | 30 req | 1 minute |
+
+**Headers в ответе:**
+```
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 95
+X-RateLimit-Reset: 1680516000
+Retry-After: 60  // если лимит исчерпан
+```
+
+---
+
+## 11. MIGRATIONS (KEY SCHEMA)
+
+```php
+// Projects
+Schema::create('projects', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('owner_id')->constrained('users')->cascadeOnDelete();
+    $table->string('name');
+    $table->text('description')->nullable();
+    $table->string('color')->default('#3B82F6');
+    $table->string('icon')->nullable();
+    $table->boolean('is_archived')->default(false);
+    $table->boolean('is_favorite')->default(false);
+    $table->integer('sort_order')->default(0);
+    $table->softDeletes();
+    $table->timestamps();
+    $table->index(['owner_id', 'is_archived', 'sort_order']);
+});
+
+// Tasks
+Schema::create('tasks', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('project_id')->nullable()->constrained()->cascadeOnDelete();
+    $table->foreignId('parent_task_id')->nullable()->constrained('tasks')->cascadeOnDelete();
+    $table->foreignId('assignee_id')->nullable()->constrained('users')->nullOnDelete();
+    $table->foreignId('created_by')->constrained('users')->cascadeOnDelete();
+    
+    $table->string('title');
+    $table->text('description')->nullable();
+    $table->enum('status', ['todo', 'in_progress', 'review', 'done'])->default('todo'); // ← HOTFIX: исправлена опечатка
+    $table->enum('priority', ['low', 'medium', 'high', 'urgent'])->default('medium');
+    $table->timestamp('due_at')->nullable(); // UTC
+    $table->integer('position')->default(0);
+    $table->boolean('is_recurring')->default(false);
+    $table->string('recurring_rule')->nullable();
+    
+    $table->softDeletes();
+    $table->timestamps();
+    
+    $table->index(['project_id', 'status', 'position']);
+    $table->index(['assignee_id', 'status']);
+    $table->index(['due_at']);
+});
+
+// Comments
+Schema::create('comments', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('task_id')->constrained()->cascadeOnDelete();
+    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+    $table->foreignId('parent_comment_id')->nullable()->constrained('comments')->nullOnDelete();
+    $table->text('content');
+    $table->timestamps();
+    $table->index(['task_id', 'created_at']);
+});
+
+// Tags
+Schema::create('tags', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+    $table->foreignId('project_id')->nullable()->constrained()->cascadeOnDelete();
+    $table->string('name');
+    $table->string('color')->default('#6B7280');
+    $table->timestamps();
+    $table->unique(['user_id', 'project_id', 'name']);
+});
+
+// Attachments (Polymorphic)
+Schema::create('attachments', function (Blueprint $table) {
+    $table->id();
+    $table->morphs('attachable'); // attachable_type, attachable_id
+    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+    $table->string('filename');
+    $table->string('url');
+    $table->string('mime_type');
+    $table->unsignedBigInteger('size');
+    $table->timestamps();
+    $table->index(['attachable_type', 'attachable_id']);
+});
+
+// Task-Tag Pivot
+Schema::create('task_tag', function (Blueprint $table) {
+    $table->foreignId('task_id')->constrained()->cascadeOnDelete();
+    $table->foreignId('tag_id')->constrained()->cascadeOnDelete();
+    $table->primary(['task_id', 'tag_id']);
+});
+
+// Project Members (includes invites via status)
+Schema::create('project_members', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('project_id')->constrained()->cascadeOnDelete();
+    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+    $table->foreignId('invited_by')->nullable()->constrained('users')->nullOnDelete();
+    $table->enum('role', ['admin', 'member', 'viewer'])->default('member');
+    $table->enum('status', ['pending', 'active'])->default('active');
+    $table->timestamp('invited_at')->nullable();
+    $table->timestamps();
+    $table->unique(['project_id', 'user_id']);
+    $table->index(['user_id', 'status']);
+});
+
+// Habits
+Schema::create('habits', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+    $table->string('name');
+    $table->string('color')->default('#8B5CF6');
+    $table->string('icon')->nullable();
+    $table->enum('frequency', ['daily', 'weekly', 'custom'])->default('daily');
+    $table->json('target_days')->nullable(); // [0,1,2,3,4,5,6]
+    $table->integer('current_streak')->default(0);
+    $table->integer('best_streak')->default(0);
+    $table->timestamp('last_completed_at')->nullable();
+    $table->timestamps();
+});
+
+// Habit Completions
+Schema::create('habit_completions', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('habit_id')->constrained()->cascadeOnDelete();
+    $table->date('completed_date');
+    $table->timestamps();
+    $table->unique(['habit_id', 'completed_date']);
+});
+
+// Notifications
+Schema::create('notifications', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+    $table->string('type');
+    $table->string('title');
+    $table->text('message');
+    $table->json('data')->nullable();
+    $table->boolean('is_read')->default(false);
+    $table->timestamp('read_at')->nullable();
+    $table->timestamps();
+    $table->index(['user_id', 'is_read', 'created_at']);
+});
+```
+
+---
+
+## 12. ENVIRONMENT (.env.example)
+
+```env
+APP_NAME="TaskSync Team"
+APP_ENV=local
+APP_DEBUG=true
+APP_URL=http://tst.test
+
+DB_CONNECTION=pgsql
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_DATABASE=tasksync_dev
+DB_USERNAME=herd
+DB_PASSWORD=
+
+REDIS_HOST=127.0.0.1
+REDIS_PASSWORD=null
+REDIS_PORT=6379
+
+CACHE_DRIVER=redis
+QUEUE_CONNECTION=redis
+SESSION_DRIVER=redis
+
+SANCTUM_STATEFUL_DOMAINS=tst.test,localhost:3000
+SESSION_DOMAIN=.tst.test
+
+BROADCAST_CONNECTION=reverb
+REVERB_APP_ID=tasksync
+REVERB_APP_KEY=tasksync-key
+REVERB_APP_SECRET=tasksync-secret
+REVERB_HOST=localhost
+REVERB_PORT=8080
+REVERB_SCHEME=http
+
+FILESYSTEM_DISK=local
+
+OPENAI_API_KEY=sk-...
+TELEGRAM_BOT_TOKEN=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+```
