@@ -1,0 +1,655 @@
+# 📗 ТЗ №2: FRONTEND (Vue 3 + TypeScript) v1.1
+## TaskSync Team — Web Client (FINAL + HOTFIX)
+
+**Версия:** 1.1 (FINAL) ✅  
+**Дата:** 03.04.2026  
+**Стек:** Vue 3.4+, Vite 5+, TypeScript 5+, Pinia, Vue Router 4+, Tailwind CSS 3+, Radix Vue, Axios, Laravel Echo, date-fns-tz  
+**Локальный домен:** `http://tst.test` (фронтенд), `http://tst.test/api/v1` (бэкенд)  
+**Источник истины:** ТЗ №0 v1.4 + HOTFIX (API Contract), ТЗ №1 v1.1 (Backend)
+
+> ⚠️ **Это руководство для ИИ-агентов.** Все критические замечания из аудита учтены.
+
+---
+
+## 1. АРХИТЕКТУРА И ПРИНЦИПЫ
+
+### 1.1. Слои приложения
+```
+src/
+├── api/                    # API клиент, эндпоинты, интерцепторы
+│   ├── client.ts           # Axios instance
+│   ├── endpoints.ts        # Все API эндпоинты
+│   └── interceptors.ts     # Auth, error handling, retry logic
+├── assets/                 # Статические файлы
+│   ├── styles/             # Глобальные стили, Tailwind config
+│   └── images/             # Иконки, логотипы
+├── components/             # Vue компоненты
+│   ├── ui/                 # Базовые UI компоненты (Button, Input, Modal)
+│   ├── layout/             # Layout компоненты (Sidebar, Header)
+│   └── features/           # Функциональные компоненты (TaskList, ProjectCard, SearchBar)
+├── composables/            # Reusable логика (useTasks, useTheme, useWebSocket, useDateFormatter)
+├── layouts/                # Page layouts (AppLayout, AuthLayout)
+├── pages/                  # Route views (Inbox, Projects, TaskDetail, Search, Settings)
+├── stores/                 # Pinia stores (auth, tasks, projects, habits, notifications, ui, search)
+├── types/                  # TypeScript интерфейсы (синхрон с ТЗ №0)
+├── utils/                  # Утилиты (formatters, validators, constants)
+└── App.vue                 # Root компонент
+```
+
+### 1.2. Принципы кода
+*   **Type-Safe:** Все API responses, props, emits, store state — строго типизированы по ТЗ №0.
+*   **Composition API:** Только `<script setup lang="ts">`, никаких Options API.
+*   **Headless UI:** Radix Vue для доступных компонентов + кастомные стили Tailwind.
+*   **Reactive State:** Pinia для глобального состояния, composables для локальной логики.
+*   **Optimistic Updates с откатом:** UI обновляется сразу, при ошибке — откат изменений + toast.
+*   **Error Boundaries:** Глобальная обработка ошибок API с toast-уведомлениями и field-level валидацией.
+*   **Test-Driven:** Vitest + Vue Test Utils для критических компонентов и stores.
+
+### 1.3. Зависимости (npm)
+```bash
+# Core
+npm install vue@latest vue-router@latest pinia@latest axios@latest
+
+# UI & Styling
+npm install tailwindcss@latest postcss autoprefixer @tailwindcss/forms @tailwindcss/typography
+npm install radix-vue@latest @radix-icons/vue clsx tailwind-merge
+
+# Real-time & Forms
+npm install laravel-echo@latest pusher-js@latest
+npm install vee-validate@latest zod@latest
+
+# Date & Timezone (CRITICAL FIX)
+npm install date-fns@latest date-fns-tz@latest
+
+# Virtual Scroll & PWA
+npm install vue-virtual-scroller@latest
+npm install @vitejs/plugin-pwa@latest workbox-window
+
+# Utils
+npm install @vueuse/core@latest uuid@latest
+
+# Dev
+npm install -D @types/node @vitejs/plugin-vue typescript@latest
+npm install -D vitest@latest @vue/test-utils@latest jsdom @pinia/testing
+npm install -D eslint@latest @typescript-eslint/eslint-plugin
+npm install -D prettier@latest prettier-plugin-tailwindcss
+```
+
+---
+
+## 2. НАСТРОЙКА ПРОЕКТА
+
+### 2.1. Инициализация
+```bash
+# Создание проекта
+npm create vite@latest tasksync-frontend -- --template vue-ts
+cd tasksync-frontend
+
+# Установка зависимостей (см. раздел 1.3)
+npm install
+
+# Инициализация Tailwind
+npx tailwindcss init -p
+```
+
+### 2.2. Окружение (.env.example)
+```env
+VITE_API_URL=/api/v1
+VITE_APP_NAME="TaskSync Team"
+
+# Reverb (WebSocket)
+VITE_REVERB_APP_KEY=tasksync-key
+VITE_REVERB_HOST=tst.test
+VITE_REVERB_PORT=8080
+VITE_REVERB_SCHEME=http
+
+# PWA (опционально)
+VITE_PWA_ENABLED=true
+```
+
+### 2.3. Конфигурация
+
+**`vite.config.ts`:**
+```typescript
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import { VitePWA } from 'vite-plugin-pwa'
+import { resolve } from 'path'
+
+export default defineConfig({
+  plugins: [
+    vue(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+      },
+      manifest: {
+        name: 'TaskSync Team',
+        short_name: 'TaskSync',
+        theme_color: '#3b82f6',
+        icons: [
+          {
+            src: '/icon-192.png',
+            sizes: '192x192',
+            type: 'image/png',
+          },
+        ],
+      },
+    }),
+  ],
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, 'src'),
+    },
+  },
+  server: {
+    port: 3000,
+    proxy: {
+      '/api': {
+        target: 'http://tst.test',
+        changeOrigin: true,
+      },
+      '/sanctum': {
+        target: 'http://tst.test',
+        changeOrigin: true,
+      },
+    },
+  },
+})
+```
+
+**`tailwind.config.js`:**
+```javascript
+/** @type {import('tailwindcss').Config} */
+export default {
+  darkMode: 'class', // Переключение через класс на <html>
+  content: ['./index.html', './src/**/*.{vue,js,ts,jsx,tsx}'],
+  theme: {
+    extend: {
+      colors: {
+        primary: {
+          50: '#eff6ff',
+          500: '#3b82f6',
+          600: '#2563eb',
+          700: '#1d4ed8',
+        },
+        // Priority colors из ТЗ №0
+        priority: {
+          low: '#6B7280',
+          medium: '#3B82F6',
+          high: '#F59E0B',
+          urgent: '#EF4444',
+        },
+        // Status colors из ТЗ №0
+        status: {
+          todo: '#3B82F6',
+          in_progress: '#F59E0B',
+          review: '#8B5CF6',
+          done: '#10B981',
+        },
+      },
+    },
+  },
+  plugins: [
+    require('@tailwindcss/forms'),
+    require('@tailwindcss/typography'),
+  ],
+}
+```
+
+**`src/types/index.ts` (синхрон с ТЗ №0):**
+```typescript
+// Все интерфейсы из ТЗ №0 v1.4 + HOTFIX
+export interface User {
+  id: number;
+  name: string;
+  email: string;
+  avatar_url: string | null;
+  email_verified_at: string | null;
+  timezone: string; // "Europe/Moscow"
+  locale: string; // "ru"
+  theme: 'light' | 'dark' | 'system';
+  created_at: string;
+}
+
+export interface Project {
+  id: number;
+  owner_id: number;
+  name: string;
+  description: string | null;
+  color: string;
+  icon: string | null;
+  is_favorite: boolean;
+  is_archived: boolean;
+  sort_order: number;
+  tasks_count?: number;
+  owner?: User;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface Task {
+  id: number;
+  project_id: number | null;
+  parent_task_id: number | null;
+  title: string;
+  description: string | null;
+  status: 'todo' | 'in_progress' | 'review' | 'done';
+  priority: 'low' | 'medium' | 'high' | 'urgent';
+  due_at: string | null; // UTC ISO 8601
+  position: number;
+  assignee_id: number | null;
+  created_by: number;
+  is_recurring: boolean;
+  recurring_rule: string | null; // "FREQ=DAILY", "FREQ=WEEKLY", etc.
+  comments_count?: number;
+  attachments_count?: number;
+  subtasks_total?: number;
+  subtasks_completed?: number;
+  project?: Project;
+  assignee?: User;
+  tags?: Tag[];
+  attachments?: Attachment[];
+  subtasks?: Task[];
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface TaskFilters {
+  project_id?: number | null;
+  status?: string;
+  assignee_id?: number;
+  priority?: string;
+  due_at_from?: string;
+  due_at_to?: string;
+  search?: string;
+  page?: number;
+  per_page?: number;
+  sort?: string;
+  order?: 'asc' | 'desc';
+}
+
+export interface SearchResult {
+  tasks: Task[];
+  projects: Project[];
+  habits: Habit[];
+}
+
+// ... остальные интерфейсы из ТЗ №0 (Comment, Tag, Attachment, Habit, Notification, ProjectMember)
+```
+
+**`src/api/client.ts`:**
+```typescript
+import axios from 'axios'
+import type { AxiosError, InternalAxiosRequestConfig, AxiosResponse } from 'axios'
+import { useAuthStore } from '@/stores/auth'
+import { useToast } from '@/composables/useToast'
+
+export const apiClient = axios.create({
+  baseURL: import.meta.env.VITE_API_URL || '/api/v1',
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'X-Requested-With': 'XMLHttpRequest',
+  },
+  withCredentials: true, // Для Sanctum cookies (CRITICAL FIX)
+})
+
+// Request interceptor - CSRF token
+apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
+  if (!config.headers.get('X-XSRF-TOKEN')) {
+    // Получить CSRF токен
+    await axios.get('/sanctum/csrf-cookie', { withCredentials: true })
+  }
+  return config
+})
+
+// Response interceptor - error handling with retry logic (CRITICAL FIX)
+apiClient.interceptors.response.use(
+  (response) => response,
+  async (error: AxiosError) => {
+    const { show } = useToast()
+    const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean }
+
+    // Rate limiting - retry after delay (CRITICAL FIX #17)
+    if (error.response?.status === 429 && !originalRequest._retry) {
+      const retryAfter = error.response.headers['retry-after'] || '60'
+      originalRequest._retry = true
+      
+      show(`Слишком много запросов. Повтор через ${retryAfter} сек.`, 'warning')
+      await new Promise(resolve => setTimeout(resolve, Number(retryAfter) * 1000))
+      return apiClient(originalRequest)
+    }
+
+    if (error.response?.status === 401) {
+      const authStore = useAuthStore()
+      authStore.logout()
+      window.location.href = '/login'
+      show('Сессия истекла. Пожалуйста, войдите снова.', 'error')
+    }
+
+    if (error.response?.status === 403) {
+      show('У вас нет доступа к этому ресурсу.', 'error')
+    }
+
+    // Field-level validation errors (CRITICAL FIX #6)
+    if (error.response?.status === 422) {
+      const data = error.response.data as { error?: { message: string; details?: Record<string, string[]> } }
+      
+      if (data?.error?.details) {
+        // Пробрасываем детали валидации для vee-validate
+        window.dispatchEvent(new CustomEvent('validation-errors', { 
+          detail: data.error.details 
+        }))
+      }
+      
+      show(data?.error?.message || 'Ошибка валидации.', 'error')
+    }
+
+    if (error.response?.status === 429 && !originalRequest._retry) {
+      show('Слишком много запросов. Попробуйте позже.', 'error')
+    }
+
+    return Promise.reject(error)
+  }
+)
+```
+
+---
+
+## 3. STATE MANAGEMENT (PINIA)
+
+### 3.1. Auth Store
+**`src/stores/auth.ts`:**
+```typescript
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import type { User } from '@/types'
+import { apiClient } from '@/api/client'
+
+export const useAuthStore = defineStore('auth', () => {
+  const user = ref<User | null>(null)
+  const isLoading = ref(false)
+
+  const isAuthenticated = computed(() => !!user.value)
+  const isEmailVerified = computed(() => !!user.value?.email_verified_at)
+  const userTimezone = computed(() => user.value?.timezone || 'UTC')
+  const userLocale = computed(() => user.value?.locale || 'ru')
+
+  async function fetchMe() {
+    try {
+      const { data } = await apiClient.get('/auth/me')
+      user.value = data.data
+      // Apply theme from user profile
+      const uiStore = useUIStore()
+      if (user.value?.theme) {
+        uiStore.setTheme(user.value.theme)
+      }
+    } catch {
+      user.value = null
+    }
+  }
+
+  async function login(email: string, password: string) {
+    isLoading.value = true
+    try {
+      const { data } = await apiClient.post('/auth/login', { email, password })
+      user.value = data.data.user
+      return { success: true }
+    } catch (error: any) {
+      return { 
+        success: false, 
+        error: error.response?.data?.error?.message || 'Ошибка входа' 
+      }
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  async function register(name: string, email: string, password: string) {
+    isLoading.value = true
+    try {
+      const { data } = await apiClient.post('/auth/register', { name, email, password })
+      user.value = data.data.user
+      return { success: true }
+    } catch (error: any) {
+      return { 
+        success: false, 
+        error: error.response?.data?.error?.message || 'Ошибка регистрации' 
+      }
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  function logout() {
+    user.value = null
+    apiClient.post('/auth/logout')
+  }
+
+  async function updateProfile(payload: Partial<User>) {
+    const { data } = await apiClient.put('/auth/me', payload)
+    user.value = data.data
+  }
+
+  return {
+    user,
+    isLoading,
+    isAuthenticated,
+    isEmailVerified,
+    userTimezone,
+    userLocale,
+    fetchMe,
+    login,
+    register,
+    logout,
+    updateProfile,
+  }
+})
+```
+
+### 3.2. Tasks Store (с откатами и project channels)
+**`src/stores/tasks.ts`:**
+```typescript
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import type { Task, TaskFilters } from '@/types'
+import { apiClient } from '@/api/client'
+import { useWebSocket } from '@/composables/useWebSocket'
+import { useToast } from '@/composables/useToast'
+
+export const useTasksStore = defineStore('tasks', () => {
+  const tasks = ref<Task[]>([])
+  const isLoading = ref(false)
+  const pagination = ref({ current_page: 1, per_page: 20, total: 0, total_pages: 0, has_more: false })
+  const filters = ref<TaskFilters>({})
+  const { show } = useToast()
+
+  const inboxTasks = computed(() => tasks.value.filter(t => !t.project_id && t.status !== 'done'))
+  const todayTasks = computed(() => {
+    const today = new Date().toISOString().split('T')[0]
+    return tasks.value.filter(t => t.due_at?.startsWith(today))
+  })
+
+  async function fetchTasks(params: TaskFilters = {}) {
+    isLoading.value = true
+    try {
+      const { data } = await apiClient.get('/tasks', { params })
+      tasks.value = data.data
+      pagination.value = data.pagination
+      filters.value = params
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  // Optimistic update с откатом (CRITICAL FIX #7)
+  async function createTask(payload: Partial<Task>) {
+    const tempId = Date.now()
+    const tempTask: Task = {
+      ...payload,
+      id: tempId,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      deleted_at: null,
+    } as Task
+
+    // Optimistic add
+    tasks.value.unshift(tempTask)
+
+    try {
+      const { data } = await apiClient.post('/tasks', payload)
+      // Replace temp with real task
+      const index = tasks.value.findIndex(t => t.id === tempId)
+      if (index !== -1) tasks.value[index] = data.data
+      return data.data
+    } catch (error: any) {
+      // Rollback
+      tasks.value = tasks.value.filter(t => t.id !== tempId)
+      show('Не удалось создать задачу', 'error')
+      throw error
+    }
+  }
+
+  async function updateTask(id: number, payload: Partial<Task>) {
+    const original = tasks.value.find(t => t.id === id)
+    const originalData = { ...original }
+
+    // Optimistic update
+    const index = tasks.value.findIndex(t => t.id === id)
+    if (index !== -1) {
+      tasks.value[index] = { ...tasks.value[index], ...payload }
+    }
+
+    try {
+      const { data } = await apiClient.put(`/tasks/${id}`, payload)
+      tasks.value[index] = data.data
+      return data.data
+    } catch (error: any) {
+      // Rollback
+      if (index !== -1 && originalData) {
+        tasks.value[index] = originalData
+      }
+      show('Не удалось обновить задачу', 'error')
+      throw error
+    }
+  }
+
+  async function deleteTask(id: number) {
+    const originalIndex = tasks.value.findIndex(t => t.id === id)
+    const originalTask = tasks.value[originalIndex]
+
+    // Optimistic remove
+    tasks.value = tasks.value.filter(t => t.id !== id)
+
+    try {
+      await apiClient.delete(`/tasks/${id}`) // Returns 204
+    } catch (error: any) {
+      // Rollback
+      if (originalIndex !== -1 && originalTask) {
+        tasks.value.splice(originalIndex, 0, originalTask)
+      }
+      show('Не удалось удалить задачу', 'error')
+      throw error
+    }
+  }
+
+  // Handle recurring task creation (CRITICAL FIX #12)
+  async function completeTask(id: number) {
+    const originalIndex = tasks.value.findIndex(t => t.id === id)
+    const originalTask = tasks.value[originalIndex]
+
+    try {
+      const { data } = await apiClient.post(`/tasks/${id}/complete`)
+      
+      // Update the completed task
+      if (originalIndex !== -1) {
+        tasks.value[originalIndex] = data.data
+      }
+
+      // Check if new recurring task was created (different ID or new task in response)
+      // Backend may return the completed task OR include next occurrence
+      // For MVP, we'll refetch to ensure consistency
+      await fetchTasks(filters.value)
+      
+      show('Задача выполнена!', 'success')
+      return data.data
+    } catch (error: any) {
+      show('Не удалось завершить задачу', 'error')
+      throw error
+    }
+  }
+
+  async function reorderTask(id: number, position: number) {
+    const original = tasks.value.find(t => t.id === id)
+    const originalPosition = original?.position
+
+    // Optimistic update
+    if (original) original.position = position
+
+    try {
+      await apiClient.put(`/tasks/${id}/position`, { position }) // CRITICAL FIX #8
+    } catch (error: any) {
+      // Rollback
+      if (original) original.position = originalPosition || 0
+      show('Не удалось изменить порядок', 'error')
+      throw error
+    }
+  }
+
+  // WebSocket subscription for projects (CRITICAL FIX #5)
+  function setupRealtime(userId?: number, projectId?: number) {
+    const { subscribe } = useWebSocket()
+    
+    // Personal notifications
+    if (userId) {
+      subscribe(`private-user.${userId}`, 'task.created', (payload: { task: Task }) => {
+        tasks.value.unshift(payload.task)
+      })
+      subscribe(`private-user.${userId}`, 'task.updated', (payload: { task: Task }) => {
+        const index = tasks.value.findIndex(t => t.id === payload.task.id)
+        if (index !== -1) tasks.value[index] = payload.task
+      })
+      subscribe(`private-user.${userId}`, 'task.deleted', (payload: { task_id: number }) => {
+        tasks.value = tasks.value.filter(t => t.id !== payload.task_id)
+      })
+    }
+
+    // Project-specific updates (CRITICAL FIX #5)
+    if (projectId) {
+      subscribe(`private-project.${projectId}`, 'task.created', (payload: { task: Task }) => {
+        if (!tasks.value.find(t => t.id === payload.task.id)) {
+          tasks.value.unshift(payload.task)
+        }
+      })
+      subscribe(`private-project.${projectId}`, 'task.updated', (payload: { task: Task }) => {
+        const index = tasks.value.findIndex(t => t.id === payload.task.id)
+        if (index !== -1) tasks.value[index] = payload.task
+      })
+      subscribe(`private-project.${projectId}`, 'comment.created', (payload: { comment: any }) => {
+        // Handle comment updates
+      })
+    }
+  }
+
+  return {
+    tasks,
+    isLoading,
+    pagination,
+    filters,
+    inboxTasks,
+    todayTasks,
+    fetchTasks,
+    createTask,
+    updateTask,
+    deleteTask,
+    completeTask,
+    reorderTask,
+    setupRealtime,
+  }
+})
+```
+

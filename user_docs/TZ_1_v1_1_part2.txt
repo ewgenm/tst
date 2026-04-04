@@ -1,0 +1,437 @@
+### 7.2. Notifications
+```
+database/migrations/2026_04_03_000010_create_notifications_table.php
+app/Models/Notification.php
+app/Http/Controllers/Api/NotificationController.php
+app/Http/Resources/NotificationResource.php
+```
+**Логика:** марк как прочитанное, получение непрочитанных, real-time через Reverb.
+
+### 7.3. Dashboard & Search
+```
+app/Http/Controllers/Api/DashboardController.php
+app/Http/Controllers/Api/SearchController.php
+```
+
+**Dashboard stats:**
+- Количество задач по статусам
+- Просроченные задачи
+- Текущий streak привычек
+- Количество проектов
+
+**Search:**
+- Полнотекстовый поиск по tasks.title, projects.name, habits.name
+- Ограничение результатов (50 каждого типа)
+
+### 7.4. Prompt для ИИ
+```
+Создай модули Habits, Notifications, Dashboard для Laravel 13 API.
+Habits:
+- Миграции habit и habit_completions (уникальный индекс на habit_id+completed_date).
+- LogCompletionAction: 
+  - Запрет на отметку за будущие даты
+  - Если уже отмечено сегодня — игнорировать
+  - Иначе создать запись, обновить streak
+- Тесты на повторное выполнение и будущие даты.
+Notifications:
+- Марк как прочитанное, получение списка с пагинацией.
+- Создание уведомления при приглашении в проект (type=project_invite).
+Dashboard:
+- Stats: запросы с агрегацией (COUNT, CASE WHEN) для задач по статусам, просроченных, streak привычек.
+Search:
+- Простой LIKE поиск по нескольким таблицам с ограничением результатов.
+Все с тестами и Resources в формате ТЗ №0.
+```
+
+---
+
+## 8. REAL-TIME (REVERB) & EVENTS
+
+### 8.1. Настройка
+```bash
+php artisan reverb:install
+php artisan reverb:start  # для локальной разработки
+```
+
+### 8.2. События (app/Events/)
+```php
+// TaskCreated.php
+class TaskCreated implements ShouldBroadcastNow
+{
+    use Dispatchable, InteractsWithSockets, SerializesModels;
+    
+    public function __construct(public Task $task) {}
+    
+    public function broadcastOn(): array 
+    {
+        return [new PrivateChannel("project.{$this->task->project_id}")];
+    }
+    
+    public function broadcastWith(): array 
+    {
+        return [
+            'task' => new TaskResource($this->task), 
+            'project_id' => $this->task->project_id
+        ];
+    }
+}
+
+// CommentCreated.php
+class CommentCreated implements ShouldBroadcastNow
+{
+    use Dispatchable, InteractsWithSockets, SerializesModels;
+    
+    public function __construct(public Comment $comment) {}
+    
+    public function broadcastOn(): array 
+    {
+        return [new PrivateChannel("project.{$this->comment->task->project_id}")];
+    }
+    
+    public function broadcastWith(): array 
+    {
+        return [
+            'comment' => new CommentResource($this->comment),
+            'task_id' => $this->comment->task_id,
+            'project_id' => $this->comment->task->project_id
+        ];
+    }
+}
+
+// ProjectMemberAdded.php (для уведомлений о приглашениях)
+class ProjectMemberAdded implements ShouldBroadcastNow
+{
+    use Dispatchable, InteractsWithSockets, SerializesModels;
+    
+    public function __construct(public ProjectMember $member) {}
+    
+    public function broadcastOn(): array 
+    {
+        return [new PrivateChannel("user.{$this->member->user_id}")];
+    }
+}
+```
+
+### 8.3. Авторизация каналов
+**`routes/channels.php`:**
+```php
+Broadcast::channel('project.{projectId}', function ($user, $projectId) {
+    $project = \App\Models\Project::find($projectId);
+    if (!$project) return false;
+    
+    // Владелец ИЛИ участник с active статусом
+    return $project->owner_id === $user->id 
+        || $project->members()
+            ->where('user_id', $user->id)
+            ->where('status', 'active')
+            ->exists();
+});
+
+Broadcast::channel('user.{userId}', function ($user, $userId) {
+    return $user->id === (int) $userId;
+});
+```
+
+### 8.4. Prompt для ИИ
+```
+Настрой Laravel Reverb для TaskSync Team.
+Создай события: TaskCreated, TaskUpdated, TaskDeleted, TaskAssigned, CommentCreated, ProjectMemberAdded.
+Каждое событие:
+- Реализует ShouldBroadcastNow.
+- Вещает на private-project.{id} или private-user.{id}.
+- Возвращает данные в формате ТЗ №0 (через Resource).
+- Включает project_id в payload для фильтрации на клиенте.
+Настрой routes/channels.php с проверкой прав:
+- project.{id}: владелец ИЛИ участник со статусом active
+- user.{id}: только сам пользователь
+Добавь тест на вещание события при создании задачи и комментария.
+```
+
+---
+
+## 9. AI & INTEGRATIONS
+
+### 9.1. AI Service (OpenAI)
+```
+app/Services/AiService.php
+app/Http/Controllers/Api/AiController.php
+app/Http/Requests/Ai/GenerateSubtasksRequest.php
+```
+
+**Rate limiting:**
+```php
+// В AiController
+public function generateSubtasks(GenerateSubtasksRequest $request)
+{
+    if (RateLimiter::tooManyAttempts('ai:'.$request->user()->id, 20)) {
+        return response()->json([
+            'success' => false,
+            'error' => ['code' => 'RATE_LIMIT_EXCEEDED', 'message' => 'Превышен лимит AI запросов (20/час)']
+        ], 429);
+    }
+    
+    RateLimiter::hit('ai:'.$request->user()->id, 3600);
+    
+    $subtasks = $this->aiService->generateSubtasks($request->input('description'));
+    
+    return response()->json(['success' => true, 'data' => ['subtasks' => $subtasks]]);
+}
+```
+
+### 9.2. Integrations (Telegram, Google)
+```
+app/Http/Controllers/Api/IntegrationController.php
+app/Services/Telegram/WebhookHandler.php
+app/Services/Google/CalendarSync.php
+```
+
+### 9.3. Prompt для ИИ
+```
+Создай модуль AI & Integrations для Laravel 13.
+AI:
+- AiService с методом generateSubtasks, использующим openai-php/laravel.
+- Rate limiting: 20 запросов в час на пользователя (через RateLimiter::for).
+- AiController с эндпоинтами из ТЗ №0.
+Integrations:
+- Telegram webhook handler: парсинг сообщения, создание задачи в Inbox.
+- Google Calendar: OAuth через Socialite, синхронизация задач с due_at в события календаря.
+Все с тестами (mock OpenAI response, mock Google API).
+```
+
+---
+
+## 10. ЭКСПОРТ/ИМПОРТ & HEALTH
+
+### 10.1. Export/Import
+```
+app/Services/Export/ProjectExportService.php
+app/Services/Import/TaskImportService.php
+```
+
+### 10.2. Health Check
+```
+app/Http/Controllers/Api/HealthController.php
+```
+
+**Пример ответа:**
+```json
+{
+  "success": true,
+  "data": {
+    "status": "ok",
+    "services": {
+      "database": "up",
+      "redis": "up",
+      "reverb": "up"
+    }
+  }
+}
+```
+
+### 10.3. Prompt для ИИ
+```
+Создай эндпоинты экспорта/импорта и health check.
+Export:
+- ProjectExportService: генерация JSON/CSV задач проекта с отношениями (теги, комментарии).
+- Возврат файла через response()->download().
+Import:
+- TaskImportService: парсинг JSON/CSV, валидация, создание задач с транзакцией, обработка ошибок.
+Health:
+- HealthController: проверка подключения к БД, Redis, Reverb.
+- Возврат формата: { status: "ok", services: { database: "up", redis: "up", reverb: "up" } }
+Добавь тесты на успешный экспорт и валидацию импорта.
+```
+
+---
+
+## 11. ТЕСТИРОВАНИЕ
+
+### 11.1. Структура тестов
+```
+tests/
+├── Feature/
+│   ├── AuthTest.php              # Регистрация, верификация email, логин
+│   ├── ProjectTest.php           # CRUD, invite, accept, ACL
+│   ├── TaskTest.php              # CRUD, recurring, reorder, subtasks cascade
+│   ├── CommentTest.php           # CRUD, ACL
+│   ├── AttachmentTest.php        # Upload для задач и комментариев
+│   ├── AclTest.php               # Матрица прав для всех ролей
+│   ├── WebSocketTest.php         # Вещание событий
+│   └── AiTest.php                # Mock OpenAI ответа
+├── Unit/
+│   ├── Actions/
+│   │   ├── CompleteTaskActionTest.php
+│   │   ├── InviteMemberActionTest.php
+│   │   └── LogCompletionActionTest.php
+│   └── Services/
+│       └── AiServiceTest.php
+└── TestCase.php
+```
+
+### 11.2. Пример теста (TaskTest)
+```php
+public function test_user_can_create_task_in_project(): void
+{
+    $user = User::factory()->create(['email_verified_at' => now()]);
+    $project = Project::factory()->for($user, 'owner')->create();
+    
+    $response = $this->actingAs($user)
+        ->postJson('/api/v1/tasks', [
+            'title' => 'New Task',
+            'project_id' => $project->id,
+            'status' => 'todo',
+            'priority' => 'medium',
+        ]);
+    
+    $response->assertStatus(201)
+        ->assertJsonStructure(['success', 'data' => ['id', 'title', 'project_id']]);
+    
+    $this->assertDatabaseHas('tasks', ['title' => 'New Task', 'project_id' => $project->id]);
+}
+
+public function test_subtasks_are_cascade_deleted(): void
+{
+    $user = User::factory()->create(['email_verified_at' => now()]);
+    $parent = Task::factory()->for($user, 'creator')->create();
+    $subtask = Task::factory()->for($user, 'creator')->create(['parent_task_id' => $parent->id]);
+    
+    $parent->delete();
+    
+    $this->assertDatabaseMissing('tasks', ['id' => $parent->id]);
+    $this->assertDatabaseMissing('tasks', ['id' => $subtask->id]); // Каскадное удаление
+}
+
+public function test_delete_returns_204(): void
+{
+    $user = User::factory()->create(['email_verified_at' => now()]);
+    $task = Task::factory()->for($user, 'creator')->create();
+    
+    $response = $this->actingAs($user)
+        ->deleteJson("/api/v1/tasks/{$task->id}");
+    
+    $response->assertStatus(204);
+}
+```
+
+### 11.3. Prompt для ИИ
+```
+Для каждого созданного модуля добавь Feature-тесты.
+Покрой сценарии:
+- Успешное создание/чтение/обновление/удаление.
+- Валидация ошибок (422).
+- Проверка прав доступа (403 для недопустимых действий).
+- Фильтрация и пагинация.
+- Каскадное удаление подзадач.
+- Удаление возвращает 204 No Content.
+- Email верификация (логин без верификации возвращает ошибку).
+Используй фабрики моделей, actingAs() для аутентификации.
+Для внешних сервисов (OpenAI, Google) используй Http::fake() или моки.
+```
+
+---
+
+## 12. ПОРЯДОК РАЗРАБОТКИ ДЛЯ ИИ-АГЕНТА
+
+### 12.1. Пошаговый план
+```
+Этап 1: Фундамент
+1.1. Настроить Laravel 13, Sanctum, Reverb, CORS, EnsureJsonResponse middleware
+1.2. Создать базовые классы: BaseResource, BaseCollection
+1.3. Реализовать модуль Auth (регистрация, email верификация, логин, me, профиль)
+
+Этап 2: Ядро
+2.1. Модуль Projects (с миграциями, политикой с явной проверкой owner_id, invite logic с уведомлением)
+2.2. Модуль Tasks (с recurring logic, sorting, aggregates, cascade delete subtasks, recurring_rule валидация)
+2.3. Модуль Comments + Tags + Attachments (с эндпоинтами для комментариев)
+
+Этап 3: Дополнительные функции
+3.1. Модуль Habits (с запретом будущих дат) + Notifications (project_invite тип)
+3.2. Dashboard stats + Search
+3.3. AI Service + Integrations (Telegram, Google)
+
+Этап 4: Инфраструктура
+4.1. Export/Import сервисы
+4.2. Health check endpoint
+4.3. Полный прогон тестов, фикс багов
+```
+
+### 12.2. Шаблон промпта для каждого модуля
+```
+[ROLE] Ты старший Laravel-разработчик, эксперт по API-First архитектуре.
+
+[CONTEXT] Проект TaskSync Team, ТЗ №0 v1.4 + HOTFIX — источник истины для контракта API.
+ТЗ №1 v1.1 — руководство по реализации бэкенда.
+
+[TASK] Создай модуль [НАЗВАНИЕ] согласно спецификации ниже.
+
+[РЕЗУЛЬТАТ]
+1. Миграции (с индексами, внешними ключами, softDeletes где нужно)
+2. Модель (с отношениями, скоупами, casts, enums)
+3. Policy (с методами согласно ACL из ТЗ №0, явная проверка owner_id)
+4. FormRequest (с валидацией из ТЗ №0, включая recurring_rule)
+5. Controller (тонкий, вызывает сервисы, DELETE возвращает 204)
+6. Service/Action (бизнес-логика)
+7. API Resource (формат ответа из ТЗ №0, с computed counts)
+8. Event (если нужно вещание, с project_id в payload)
+9. Feature-тесты (покрытие основных сценариев, включая ACL и каскадное удаление)
+
+[ПРАВИЛА]
+- Используй PHP 8.3 typed properties, readonly classes, enums
+- Не добавляй бизнес-логику в контроллеры
+- Все ответы через BaseResource/BaseCollection (кроме DELETE → 204)
+- Проверяй права через Policy с явной проверкой owner_id
+- Добавляй комментарии только для сложной логики
+- Пиши тесты ПЕРЕД реализацией (TDD-стиль)
+- Для User модели учитывай email_verified_at
+
+[ОГРАНИЧЕНИЯ]
+- Не меняй структуру JSON ответа из ТЗ №0
+- Не добавляй поля в модели, не описанные в ТЗ №0
+- Используй только указанные пакеты из composer.json
+```
+
+---
+
+## 13. ДЕПЛОЙ И МОНТОРИНГ
+
+### 13.1. Production-чеклист
+```bash
+# Оптимизация
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+php artisan event:cache
+
+# Очереди
+php artisan queue:work --sleep=3 --tries=3 --max-time=3600
+
+# WebSockets
+php artisan reverb:start --host=0.0.0.0 --port=8080
+
+# Supervisor config для очереди и reverb
+```
+
+### 13.2. Monitoring
+*   **Health endpoint:** `GET /health` для uptime-мониторинга.
+*   **Logging:** Структурированные логи в JSON (`monolog` handler).
+*   **Error tracking:** Интеграция с Sentry/Logflare (опционально).
+
+---
+
+## ✅ ЧЕК-ЛИСТ ЗАВЕРШЕНИЯ БЭКЕНДА
+
+- [ ] Все модули реализованы согласно ТЗ №0
+- [ ] 100% эндпоинтов покрыты Feature-тестами
+- [ ] Права доступа (ACL) протестированы для всех ролей (owner, admin, member, viewer, author)
+- [ ] Email верификация работает (логин без верификации блокируется)
+- [ ] WebSocket события вещают корректно, авторизация каналов работает
+- [ ] Rate limiting настроен на всех чувствительных эндпоинтах
+- [ ] Формат ответов `{ success, data, meta }` соблюдается везде (кроме DELETE → 204)
+- [ ] Валидация возвращает ошибки в формате ТЗ №0
+- [ ] recurring_rule валидируется
+- [ ] Подзадачи удаляются каскадно
+- [ ] Уведомления создаются при приглашении в проект (type=project_invite)
+- [ ] Документация API авто-генерируется (опционально: Scribe или Postman collection)
+
+---
+

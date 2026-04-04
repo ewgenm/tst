@@ -1,0 +1,966 @@
+# 📘 ТЗ №1: BACKEND (Laravel 13) v1.1
+## TaskSync Team — API Server (FINAL + HOTFIX)
+
+**Версия:** 1.1 (FINAL) ✅  
+**Дата:** 03.04.2026  
+**Стек:** Laravel 13, PHP 8.3+, PostgreSQL 16+, Redis, Sanctum, Reverb, OpenAI SDK  
+**Локальный домен:** `http://tst.test` (Laravel Herd)  
+**Источник истины:** ТЗ №0 v1.4 + HOTFIX
+
+> ⚠️ **Это единственный источник правды для бэкенда.** Все критические замечания из аудита учтены.
+
+---
+
+## 1. АРХИТЕКТУРА И ПРИНЦИПЫ
+
+### 1.1. Слои приложения
+```
+app/
+├── Http/
+│   ├── Controllers/Api/     # Тонкие контроллеры (вызов сервисов)
+│   ├── Requests/            # FormRequest валидация
+│   ├── Resources/           # API Resources (JSON трансформация)
+│   └── Middleware/          # EnsureJsonResponse, Sanctum, CORS
+├── Models/                  # Eloquent модели (с отношениями, скоупами)
+├── Policies/                # Авторизация (матрица ACL из ТЗ №0)
+├── Services/                # Бизнес-логика (чистые классы)
+├── Actions/                 # Single-responsibility действия
+├── Events/                  # WebSocket события (ShouldBroadcastNow)
+├── Jobs/                    # Очереди (уведомления, AI)
+├── Rules/                   # Кастомные правила валидации
+└── Traits/                  # Переиспользуемая логика
+```
+
+### 1.2. Принципы кода
+*   **API-First:** Все ответы через `API Resource`, формат `{ success, data, meta }`.
+*   **DELETE returns 204:** Успешное удаление возвращает `response()->noContent()` (204).
+*   **Type-safe:** PHP 8.3 typed properties, `readonly class` для DTO, enum для статусов.
+*   **Thin Controllers:** Контроллеры только принимают запрос, валидируют, вызывают сервис, возвращают ресурс.
+*   **Service Layer:** Бизнес-логика вынесена в `Services/` и `Actions/`.
+*   **Policy-Based ACL:** Все проверки прав через `Policies`, с явной проверкой `owner_id`.
+*   **Test-Driven:** Каждый эндпоинт покрывается `Feature Test` перед генерацией следующего.
+
+### 1.3. Зависимости (composer)
+```bash
+composer require laravel/sanctum laravel/reverb \
+  spatie/laravel-query-builder \
+  spatie/laravel-eloquent-sortable \
+  openai-php/laravel \
+  laravel/socialite \
+  intervention/image-laravel \
+  maatwebsite/excel \
+  rlanvin/php-rrule  # для валидации recurring_rule
+
+composer require --dev laravel/pint phpunit/phpunit \
+  pestphp/pest pestphp/pest-plugin-laravel \
+  nunomaduro/collision
+```
+
+---
+
+## 2. НАСТРОЙКА ПРОЕКТА
+
+### 2.1. Инициализация
+```bash
+# Создание проекта
+laravel new tasksync-backend --branch=13.x --git
+cd tasksync-backend
+
+# Настройка .env (см. ТЗ №0 раздел 12)
+cp .env.example .env
+# Отредактировать: APP_URL, DB_*, REDIS_*, REVERB_*, OPENAI_API_KEY
+
+# Установка зависимостей
+composer install
+
+# Генерация ключей
+php artisan key:generate
+php artisan sanctum:install
+
+# Миграции + сидеры (после создания)
+php artisan migrate --seed
+```
+
+### 2.2. Конфигурация
+**`config/cors.php`:**
+```php
+'paths' => ['api/*', 'sanctum/csrf-cookie', 'broadcasting/auth'],
+'allowed_origins' => ['http://tst.test', 'http://localhost:3000'],
+'allowed_methods' => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+'allowed_headers' => ['*'],
+'exposed_headers' => ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
+'max_age' => 0,
+'supports_credentials' => true,
+```
+
+**`config/sanctum.php`:**
+```php
+'stateful' => explode(',', env('SANCTUM_STATEFUL_DOMAINS', 'tst.test,localhost:3000')),
+```
+
+**`app/Http/Kernel.php` (или bootstrap/app.php в Laravel 11+):**
+```php
+// Глобальное middleware для API
+'api' => [
+    \Illuminate\Http\Middleware\HandleCors::class,
+    \App\Http\Middleware\EnsureJsonResponse::class,  # Требует Accept: application/json
+    \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
+    \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
+    \Illuminate\Routing\Middleware\SubstituteBindings::class,
+],
+```
+
+**`app/Http/Middleware/EnsureJsonResponse.php`:**
+```php
+public function handle($request, Closure $next): Response
+{
+    $request->headers->set('Accept', 'application/json');
+    return $next($request);
+}
+```
+
+### 2.3. Базовые классы
+
+**`app/Http/Resources/BaseResource.php`:**
+```php
+abstract class BaseResource extends JsonResource
+{
+    public function toResponse($request): array
+    {
+        return [
+            'success' => true,
+            'data' => $this->toArray($request),
+            'meta' => ['timestamp' => now()->toISOString()],
+        ];
+    }
+}
+```
+
+**`app/Http/Resources/BaseCollection.php`:**
+```php
+abstract class BaseCollection extends ResourceCollection
+{
+    public function toResponse($request): array
+    {
+        return [
+            'success' => true,
+            'data' => $this->collection,
+            'pagination' => [
+                'current_page' => $this->currentPage(),
+                'per_page' => $this->perPage(),
+                'total' => $this->total(),
+                'total_pages' => $this->lastPage(),
+                'has_more' => $this->hasMorePages(),
+            ],
+            'meta' => ['timestamp' => now()->toISOString()],
+        ];
+    }
+}
+```
+
+---
+
+## 3. МОДУЛЬ: AUTH & USERS
+
+### 3.1. Файлы для генерации
+```
+app/Models/User.php
+app/Http/Requests/Auth/RegisterRequest.php
+app/Http/Requests/Auth/LoginRequest.php
+app/Http/Requests/Auth/UpdateProfileRequest.php
+app/Http/Controllers/Auth/AuthController.php
+app/Http/Resources/UserResource.php
+app/Mail/EmailVerificationMail.php
+routes/api.php (auth routes)
+tests/Feature/AuthTest.php
+```
+
+### 3.2. Ключевая логика
+*   **Модель User:** Должна включать поле `email_verified_at` (nullable timestamp).
+*   **Регистрация:** Создание пользователя, отправка письма на подтверждение (queue), возврат токена Sanctum.
+*   **Email Verification:** Использовать встроенный `MustVerifyEmail` интерфейс Laravel.
+*   **Login:** Проверка credentials, проверка `email_verified_at`, возврат токена.
+*   **Me:** Возврат `UserResource` с `timezone`, `theme`, `locale`, `email_verified_at`.
+*   **Update Profile:** Валидация `theme: 'light'|'dark'|'system'`, `timezone` из `DateTimeZone::listIdentifiers()`.
+
+### 3.3. Prompt для ИИ-агента
+```
+Создай модуль Auth для Laravel 13 API.
+Включи:
+1. Модель User с полями из ТЗ №0: name, email, email_verified_at, password, avatar_url, timezone, locale, theme (enum), created_at.
+   - Реализуй интерфейс MustVerifyEmail для верификации email.
+2. AuthController с методами: register, login, logout, me, updateProfile.
+   - register: создаёт пользователя, отправляет EmailVerificationMail (в очередь), возвращает токен.
+   - login: проверяет credentials И email_verified_at, возвращает токен.
+   - me: возвращает UserResource с полем email_verified_at.
+3. FormRequest для каждого метода с валидацией из ТЗ №0.
+4. UserResource, который возвращает формат { success, data, meta }.
+5. Feature-тесты: регистрация, верификация email, логин с неподтверждённым email (должен вернуть ошибку), доступ к /me с токеном, обновление профиля.
+Используй Sanctum для аутентификации, typed properties PHP 8.3.
+Не добавляй бизнес-логику в контроллер — вынеси в сервисы при необходимости.
+```
+
+---
+
+## 4. МОДУЛЬ: PROJECTS
+
+### 4.1. Файлы для генерации
+```
+database/migrations/2026_04_03_000001_create_projects_table.php
+database/migrations/2026_04_03_000002_create_project_members_table.php
+app/Models/Project.php
+app/Models/ProjectMember.php
+app/Policies/ProjectPolicy.php
+app/Http/Requests/Project/StoreProjectRequest.php
+app/Http/Requests/Project/UpdateProjectRequest.php
+app/Http/Requests/Project/InviteMemberRequest.php
+app/Http/Controllers/Api/ProjectController.php
+app/Http/Resources/ProjectResource.php
+app/Http/Resources/ProjectMemberResource.php
+app/Actions/Project/InviteMemberAction.php
+app/Actions/Project/AcceptInviteAction.php
+app/Events/ProjectMemberAdded.php
+routes/api.php (project routes)
+tests/Feature/ProjectTest.php
+```
+
+### 4.2. Ключевая логика
+*   **Создание проекта:** `owner_id = auth()->id()`, автоматическое добавление создателя как `ProjectMember` с ролью `admin` и статусом `active`.
+*   **ACL — явная проверка owner_id:** `ProjectPolicy` должен явно проверять `owner_id` отдельно от ролей в `project_members`.
+*   **Приглашение:** `InviteMemberAction` создает `ProjectMember` со `status='pending'`, создает уведомление в таблице `notifications` с типом `project_invite`, отправляет email (queue) и real-time событие через Reverb.
+*   **Принятие приглашения:** `AcceptInviteAction` меняет `status` на `active`. Доступно только приглашенному пользователю.
+*   **Сортировка:** Поле `sort_order` обновляется через `PUT /projects/{id}`.
+*   **Задачи проекта:** `GET /projects/{id}/tasks` — это алиас на `GET /tasks?project_id={id}`.
+
+### 4.3. ProjectPolicy (пример кода)
+```php
+class ProjectPolicy
+{
+    public function view(User $user, Project $project): bool
+    {
+        // Владелец ИЛИ участник с active статусом
+        return $project->owner_id === $user->id 
+            || $project->members()->where('user_id', $user->id)->where('status', 'active')->exists();
+    }
+    
+    public function delete(User $user, Project $project): bool
+    {
+        // ТОЛЬКО владелец может удалить проект
+        return $project->owner_id === $user->id;
+    }
+    
+    public function archive(User $user, Project $project): bool
+    {
+        // Владелец ИЛИ Admin
+        return $project->owner_id === $user->id 
+            || $this->isAdmin($user, $project);
+    }
+    
+    public function invite(User $user, Project $project): bool
+    {
+        // Владелец ИЛИ Admin
+        return $project->owner_id === $user->id 
+            || $this->isAdmin($user, $project);
+    }
+    
+    private function isAdmin(User $user, Project $project): bool
+    {
+        return $project->members()
+            ->where('user_id', $user->id)
+            ->where('role', 'admin')
+            ->where('status', 'active')
+            ->exists();
+    }
+}
+```
+
+### 4.4. Prompt для ИИ-агента
+```
+Создай модуль Projects для Laravel 13 API.
+Включи:
+1. Миграции: 
+   - projects (с owner_id, description, sort_order, softDeletes)
+   - project_members (с enum role БЕЗ 'owner', enum status pending/active, invited_at)
+2. Модели с отношениями: 
+   - Project hasMany ProjectMember, belongsTo User (owner), hasMany Task
+   - ProjectMember belongsTo Project, belongsTo User, belongsTo (invitedBy)
+3. ProjectPolicy с методами: viewAny, view, create, update, delete, archive, invite, removeMember.
+   - Явно проверяй owner_id для delete/archive/invite (см. пример кода в ТЗ).
+   - Для остальных действий проверяй роль в project_members со статусом active.
+4. ProjectController с CRUD, archive, restore, invite, members list, tasks list (алиас на /tasks?project_id=).
+5. FormRequests с валидацией из ТЗ №0.
+6. Resources: 
+   - ProjectResource (с computed tasks_count через withCount, owner через whenLoaded)
+   - ProjectMemberResource (с invited_at)
+7. Actions: 
+   - InviteMemberAction: создает pending запись, создает Notification (type=project_invite), отправляет email, вещает событие.
+   - AcceptInviteAction: меняет статус на active.
+8. Тесты: создание проекта, приглашение пользователя, проверка создания уведомления, принятие приглашения, проверка прав доступа (owner vs admin vs member).
+Используй spatie/laravel-query-builder для фильтрации ?archived=false.
+Команда для политики: php artisan make:policy ProjectPolicy --model=Project
+```
+
+---
+
+## 5. МОДУЛЬ: TASKS
+
+### 5.1. Файлы для генерации
+```
+database/migrations/2026_04_03_000003_create_tasks_table.php
+app/Enums/TaskStatus.php
+app/Enums/TaskPriority.php
+app/Models/Task.php
+app/Policies/TaskPolicy.php
+app/Http/Requests/Task/StoreTaskRequest.php
+app/Http/Requests/Task/UpdateTaskRequest.php
+app/Http/Controllers/Api/TaskController.php
+app/Http/Resources/TaskResource.php
+app/Actions/Task/CompleteTaskAction.php
+app/Actions/Task/ReorderTaskAction.php
+app/Rules/ValidRecurringRule.php
+routes/api.php (task routes)
+tests/Feature/TaskTest.php
+```
+
+### 5.2. Ключевая логика
+*   **Inbox:** Задачи с `project_id = null` автоматически попадают в Inbox (фильтр на фронтенде).
+*   **Статусы:** Enum `TaskStatus` без `inbox` (только `todo`, `in_progress`, `review`, `done`).
+*   **Каскадное удаление подзадач:** При удалении родительской задачи все подзадачи удаляются автоматически (`cascadeOnDelete()` на `parent_task_id`).
+*   **Recurring:** `CompleteTaskAction`:
+  ```php
+  if ($task->is_recurring && $task->recurring_rule) {
+      $nextDue = $this->calculateNextDue($task->due_at, $task->recurring_rule);
+      $task->replicate()->fill([
+          'status' => 'todo',
+          'due_at' => $nextDue,
+          'completed_at' => null,
+      ])->save();
+  }
+  ```
+*   **Sorting:** 
+  - Поле `position` (integer). 
+  - `PUT /tasks/{id}/position` с телом `{ "position": 5 }` или `{ "after_id": 123 }`.
+  - При изменении `project_id` или `status` задача автоматически получает последнюю позицию в новом контексте.
+*   **Aggregates:** В `TaskResource` использовать `whenLoaded()` для отношений. Counts через `withCount()` в контроллере.
+*   **subtasks_total / subtasks_completed:**
+  ```php
+  // В TaskController index/show
+  ->withCount(['subtasks', 'subtasks as subtasks_completed_count' => fn($q) => $q->where('status', 'done')])
+  
+  // В TaskResource
+  'subtasks_total' => $this->subtasks_count,
+  'subtasks_completed' => $this->subtasks_completed_count,
+  ```
+
+### 5.3. Валидация recurring_rule
+**`app/Rules/ValidRecurringRule.php`:**
+```php
+class ValidRecurringRule implements ValidationRule
+{
+    public function validate(string $attribute, mixed $value, Closure $fail): void
+    {
+        if ($value && !preg_match('/^FREQ=(DAILY|WEEKLY|MONTHLY|YEARLY)(;INTERVAL=\d+)?(;BYDAY=[A-Z,]+)?$/', $value)) {
+            $fail('Неверный формат правила повторения. Допустимы: FREQ=DAILY, FREQ=WEEKLY, FREQ=MONTHLY');
+        }
+    }
+}
+```
+
+**В StoreTaskRequest / UpdateTaskRequest:**
+```php
+'recurring_rule' => 'nullable|string|new ValidRecurringRule()',
+```
+
+### 5.4. Prompt для ИИ-агента
+```
+Создай модуль Tasks для Laravel 13 API.
+Включи:
+1. Миграция tasks с полями из ТЗ №0: 
+   - project_id (nullable, cascadeOnDelete)
+   - parent_task_id (nullable, cascadeOnDelete — подзадачи удаляются каскадно)
+   - due_at (timestamp UTC)
+   - position (integer, default 0)
+   - is_recurring, recurring_rule
+   - softDeletes
+2. Enum TaskStatus (todo,in_progress,review,done) и TaskPriority (low,medium,high,urgent).
+3. Модель Task с отношениями: project, assignee, creator, parent, subtasks, tags (belongsToMany), attachments (morphMany), comments (hasMany).
+4. TaskPolicy: автор может редактировать свою задачу, владелец/админ проекта — любую.
+5. TaskController с индексом (фильтрация через spatie/laravel-query-builder), store, show, update, destroy, restore, complete, reorder.
+   - Эндпоинты: GET /tasks, POST /tasks, GET /tasks/{id}, PUT /tasks/{id}, DELETE /tasks/{id}, POST /tasks/{id}/restore, POST /tasks/{id}/complete, PUT /tasks/{id}/position
+   - GET /projects/{id}/tasks — алиас на GET /tasks?project_id={id}
+6. CompleteTaskAction: помечает done, если is_recurring — создает копию с новым due_at по правилу RRULE.
+7. ReorderTaskAction: обновляет position, при смене project_id/status ставит задачу в конец нового списка.
+8. ValidRecurringRule: валидация формата RRULE (FREQ=DAILY|WEEKLY|MONTHLY).
+9. TaskResource: 
+   - Возвращает формат из ТЗ №0
+   - subtasks_total через withCount('subtasks')
+   - subtasks_completed через withCount('subtasks as subtasks_completed_count', fn($q) => $q->where('status', 'done'))
+10. Тесты: создание задачи, фильтрация, завершение с recurring, каскадное удаление подзадач, reorder, проверка прав.
+Используй typed properties, readonly classes для DTO.
+```
+
+---
+
+## 6. МОДУЛИ: COMMENTS, TAGS, ATTACHMENTS
+
+### 6.1. Comments
+```
+database/migrations/2026_04_03_000004_create_comments_table.php
+app/Models/Comment.php
+app/Policies/CommentPolicy.php
+app/Http/Controllers/Api/CommentController.php
+app/Http/Resources/CommentResource.php
+app/Events/CommentCreated.php
+```
+**Логика:** Автор или admin/owner проекта может удалять комментарий.
+
+### 6.2. Tags
+```
+database/migrations/2026_04_03_000005_create_tags_table.php
+database/migrations/2026_04_03_000006_create_task_tag_table.php
+app/Models/Tag.php
+app/Http/Controllers/Api/TagController.php
+app/Http/Resources/TagResource.php
+```
+**Логика:** Теги привязаны к пользователю, опционально к проекту.
+
+### 6.3. Attachments (Polymorphic)
+```
+database/migrations/2026_04_03_000007_create_attachments_table.php
+app/Models/Attachment.php
+app/Http/Controllers/Api/AttachmentController.php
+app/Http/Resources/AttachmentResource.php
+app/Services/FileUploadService.php
+```
+
+**AttachmentController эндпоинты:**
+```php
+// Для задач
+POST   /tasks/{id}/attachments       # storeForTask
+GET    /tasks/{id}/attachments       # indexForTask
+
+// Для комментариев
+POST   /comments/{id}/attachments    # storeForComment
+GET    /comments/{id}/attachments    # indexForComment
+
+// Универсальное удаление
+DELETE /attachments/{id}             # destroy
+```
+
+**Пример реализации:**
+```php
+public function storeForComment(Request $request, Comment $comment)
+{
+    $this->authorize('update', $comment->task); // Проверка прав на задачу
+    
+    $attachment = $this->fileUploadService->upload(
+        $request->file('file'),
+        'comment',
+        $comment->id
+    );
+    
+    return new AttachmentResource($attachment);
+}
+```
+
+### 6.4. Общий Prompt для ИИ
+```
+Создай модули Comments, Tags, Attachments для Laravel 13 API.
+Для каждого:
+1. Миграция согласно ТЗ №0 (для attachments — polymorphic morphs 'attachable').
+2. Модель с отношениями.
+3. Policy с логикой: автор может удалять свой контент, admin/owner проекта — любой.
+4. Controller с CRUD:
+   - Comments: index, store, update, destroy для задач
+   - Attachments: indexForTask, storeForTask, indexForComment, storeForComment, destroy
+   - Tags: index, store, update, destroy
+5. Resource с форматом из ТЗ №0.
+6. Тесты на создание, доступ, удаление.
+Для Attachments: 
+- Использовать Storage::disk('local') или 's3'
+- Валидация mime-types: jpg,png,pdf,doc,docx,xls,xlsx,zip
+- Максимум 10MB
+Команда для политики: php artisan make:policy CommentPolicy --model=Comment
+```
+
+---
+
+## 7. МОДУЛИ: HABITS, NOTIFICATIONS, DASHBOARD
+
+### 7.1. Habits
+```
+database/migrations/2026_04_03_000008_create_habits_table.php
+database/migrations/2026_04_03_000009_create_habit_completions_table.php
+app/Models/Habit.php
+app/Http/Controllers/Api/HabitController.php
+app/Http/Resources/HabitResource.php
+app/Actions/Habit/LogCompletionAction.php
+```
+
+**LogCompletionAction логика:**
+```php
+public function execute(Habit $habit, Carbon $date = null): bool
+{
+    $date = $date ?? now();
+    
+    // Запрет на отметку за будущие даты
+    if ($date->isFuture()) {
+        throw new \Exception('Нельзя отметить привычку за будущие даты');
+    }
+    
+    // Проверка на уже выполненное сегодня
+    $exists = $habit->completions()
+        ->whereDate('completed_date', $date)
+        ->exists();
+    
+    if ($exists) {
+        return false; // Уже отмечено
+    }
+    
+    // Создание записи
+    $habit->completions()->create(['completed_date' => $date]);
+    
+    // Обновление streak
+    $this->updateStreak($habit);
+    
+    return true;
+}
+```
+
+### 7.2. Notifications
+```
+database/migrations/2026_04_03_000010_create_notifications_table.php
+app/Models/Notification.php
+app/Http/Controllers/Api/NotificationController.php
+app/Http/Resources/NotificationResource.php
+```
+**Логика:** марк как прочитанное, получение непрочитанных, real-time через Reverb.
+
+### 7.3. Dashboard & Search
+```
+app/Http/Controllers/Api/DashboardController.php
+app/Http/Controllers/Api/SearchController.php
+```
+
+**Dashboard stats:**
+- Количество задач по статусам
+- Просроченные задачи
+- Текущий streak привычек
+- Количество проектов
+
+**Search:**
+- Полнотекстовый поиск по tasks.title, projects.name, habits.name
+- Ограничение результатов (50 каждого типа)
+
+### 7.4. Prompt для ИИ
+```
+Создай модули Habits, Notifications, Dashboard для Laravel 13 API.
+Habits:
+- Миграции habit и habit_completions (уникальный индекс на habit_id+completed_date).
+- LogCompletionAction: 
+  - Запрет на отметку за будущие даты
+  - Если уже отмечено сегодня — игнорировать
+  - Иначе создать запись, обновить streak
+- Тесты на повторное выполнение и будущие даты.
+Notifications:
+- Марк как прочитанное, получение списка с пагинацией.
+- Создание уведомления при приглашении в проект (type=project_invite).
+Dashboard:
+- Stats: запросы с агрегацией (COUNT, CASE WHEN) для задач по статусам, просроченных, streak привычек.
+Search:
+- Простой LIKE поиск по нескольким таблицам с ограничением результатов.
+Все с тестами и Resources в формате ТЗ №0.
+```
+
+---
+
+## 8. REAL-TIME (REVERB) & EVENTS
+
+### 8.1. Настройка
+```bash
+php artisan reverb:install
+php artisan reverb:start  # для локальной разработки
+```
+
+### 8.2. События (app/Events/)
+```php
+// TaskCreated.php
+class TaskCreated implements ShouldBroadcastNow
+{
+    use Dispatchable, InteractsWithSockets, SerializesModels;
+    
+    public function __construct(public Task $task) {}
+    
+    public function broadcastOn(): array 
+    {
+        return [new PrivateChannel("project.{$this->task->project_id}")];
+    }
+    
+    public function broadcastWith(): array 
+    {
+        return [
+            'task' => new TaskResource($this->task), 
+            'project_id' => $this->task->project_id
+        ];
+    }
+}
+
+// CommentCreated.php
+class CommentCreated implements ShouldBroadcastNow
+{
+    use Dispatchable, InteractsWithSockets, SerializesModels;
+    
+    public function __construct(public Comment $comment) {}
+    
+    public function broadcastOn(): array 
+    {
+        return [new PrivateChannel("project.{$this->comment->task->project_id}")];
+    }
+    
+    public function broadcastWith(): array 
+    {
+        return [
+            'comment' => new CommentResource($this->comment),
+            'task_id' => $this->comment->task_id,
+            'project_id' => $this->comment->task->project_id
+        ];
+    }
+}
+
+// ProjectMemberAdded.php (для уведомлений о приглашениях)
+class ProjectMemberAdded implements ShouldBroadcastNow
+{
+    use Dispatchable, InteractsWithSockets, SerializesModels;
+    
+    public function __construct(public ProjectMember $member) {}
+    
+    public function broadcastOn(): array 
+    {
+        return [new PrivateChannel("user.{$this->member->user_id}")];
+    }
+}
+```
+
+### 8.3. Авторизация каналов
+**`routes/channels.php`:**
+```php
+Broadcast::channel('project.{projectId}', function ($user, $projectId) {
+    $project = \App\Models\Project::find($projectId);
+    if (!$project) return false;
+    
+    // Владелец ИЛИ участник с active статусом
+    return $project->owner_id === $user->id 
+        || $project->members()
+            ->where('user_id', $user->id)
+            ->where('status', 'active')
+            ->exists();
+});
+
+Broadcast::channel('user.{userId}', function ($user, $userId) {
+    return $user->id === (int) $userId;
+});
+```
+
+### 8.4. Prompt для ИИ
+```
+Настрой Laravel Reverb для TaskSync Team.
+Создай события: TaskCreated, TaskUpdated, TaskDeleted, TaskAssigned, CommentCreated, ProjectMemberAdded.
+Каждое событие:
+- Реализует ShouldBroadcastNow.
+- Вещает на private-project.{id} или private-user.{id}.
+- Возвращает данные в формате ТЗ №0 (через Resource).
+- Включает project_id в payload для фильтрации на клиенте.
+Настрой routes/channels.php с проверкой прав:
+- project.{id}: владелец ИЛИ участник со статусом active
+- user.{id}: только сам пользователь
+Добавь тест на вещание события при создании задачи и комментария.
+```
+
+---
+
+## 9. AI & INTEGRATIONS
+
+### 9.1. AI Service (OpenAI)
+```
+app/Services/AiService.php
+app/Http/Controllers/Api/AiController.php
+app/Http/Requests/Ai/GenerateSubtasksRequest.php
+```
+
+**Rate limiting:**
+```php
+// В AiController
+public function generateSubtasks(GenerateSubtasksRequest $request)
+{
+    if (RateLimiter::tooManyAttempts('ai:'.$request->user()->id, 20)) {
+        return response()->json([
+            'success' => false,
+            'error' => ['code' => 'RATE_LIMIT_EXCEEDED', 'message' => 'Превышен лимит AI запросов (20/час)']
+        ], 429);
+    }
+    
+    RateLimiter::hit('ai:'.$request->user()->id, 3600);
+    
+    $subtasks = $this->aiService->generateSubtasks($request->input('description'));
+    
+    return response()->json(['success' => true, 'data' => ['subtasks' => $subtasks]]);
+}
+```
+
+### 9.2. Integrations (Telegram, Google)
+```
+app/Http/Controllers/Api/IntegrationController.php
+app/Services/Telegram/WebhookHandler.php
+app/Services/Google/CalendarSync.php
+```
+
+### 9.3. Prompt для ИИ
+```
+Создай модуль AI & Integrations для Laravel 13.
+AI:
+- AiService с методом generateSubtasks, использующим openai-php/laravel.
+- Rate limiting: 20 запросов в час на пользователя (через RateLimiter::for).
+- AiController с эндпоинтами из ТЗ №0.
+Integrations:
+- Telegram webhook handler: парсинг сообщения, создание задачи в Inbox.
+- Google Calendar: OAuth через Socialite, синхронизация задач с due_at в события календаря.
+Все с тестами (mock OpenAI response, mock Google API).
+```
+
+---
+
+## 10. ЭКСПОРТ/ИМПОРТ & HEALTH
+
+### 10.1. Export/Import
+```
+app/Services/Export/ProjectExportService.php
+app/Services/Import/TaskImportService.php
+```
+
+### 10.2. Health Check
+```
+app/Http/Controllers/Api/HealthController.php
+```
+
+**Пример ответа:**
+```json
+{
+  "success": true,
+  "data": {
+    "status": "ok",
+    "services": {
+      "database": "up",
+      "redis": "up",
+      "reverb": "up"
+    }
+  }
+}
+```
+
+### 10.3. Prompt для ИИ
+```
+Создай эндпоинты экспорта/импорта и health check.
+Export:
+- ProjectExportService: генерация JSON/CSV задач проекта с отношениями (теги, комментарии).
+- Возврат файла через response()->download().
+Import:
+- TaskImportService: парсинг JSON/CSV, валидация, создание задач с транзакцией, обработка ошибок.
+Health:
+- HealthController: проверка подключения к БД, Redis, Reverb.
+- Возврат формата: { status: "ok", services: { database: "up", redis: "up", reverb: "up" } }
+Добавь тесты на успешный экспорт и валидацию импорта.
+```
+
+---
+
+## 11. ТЕСТИРОВАНИЕ
+
+### 11.1. Структура тестов
+```
+tests/
+├── Feature/
+│   ├── AuthTest.php              # Регистрация, верификация email, логин
+│   ├── ProjectTest.php           # CRUD, invite, accept, ACL
+│   ├── TaskTest.php              # CRUD, recurring, reorder, subtasks cascade
+│   ├── CommentTest.php           # CRUD, ACL
+│   ├── AttachmentTest.php        # Upload для задач и комментариев
+│   ├── AclTest.php               # Матрица прав для всех ролей
+│   ├── WebSocketTest.php         # Вещание событий
+│   └── AiTest.php                # Mock OpenAI ответа
+├── Unit/
+│   ├── Actions/
+│   │   ├── CompleteTaskActionTest.php
+│   │   ├── InviteMemberActionTest.php
+│   │   └── LogCompletionActionTest.php
+│   └── Services/
+│       └── AiServiceTest.php
+└── TestCase.php
+```
+
+### 11.2. Пример теста (TaskTest)
+```php
+public function test_user_can_create_task_in_project(): void
+{
+    $user = User::factory()->create(['email_verified_at' => now()]);
+    $project = Project::factory()->for($user, 'owner')->create();
+    
+    $response = $this->actingAs($user)
+        ->postJson('/api/v1/tasks', [
+            'title' => 'New Task',
+            'project_id' => $project->id,
+            'status' => 'todo',
+            'priority' => 'medium',
+        ]);
+    
+    $response->assertStatus(201)
+        ->assertJsonStructure(['success', 'data' => ['id', 'title', 'project_id']]);
+    
+    $this->assertDatabaseHas('tasks', ['title' => 'New Task', 'project_id' => $project->id]);
+}
+
+public function test_subtasks_are_cascade_deleted(): void
+{
+    $user = User::factory()->create(['email_verified_at' => now()]);
+    $parent = Task::factory()->for($user, 'creator')->create();
+    $subtask = Task::factory()->for($user, 'creator')->create(['parent_task_id' => $parent->id]);
+    
+    $parent->delete();
+    
+    $this->assertDatabaseMissing('tasks', ['id' => $parent->id]);
+    $this->assertDatabaseMissing('tasks', ['id' => $subtask->id]); // Каскадное удаление
+}
+
+public function test_delete_returns_204(): void
+{
+    $user = User::factory()->create(['email_verified_at' => now()]);
+    $task = Task::factory()->for($user, 'creator')->create();
+    
+    $response = $this->actingAs($user)
+        ->deleteJson("/api/v1/tasks/{$task->id}");
+    
+    $response->assertStatus(204);
+}
+```
+
+### 11.3. Prompt для ИИ
+```
+Для каждого созданного модуля добавь Feature-тесты.
+Покрой сценарии:
+- Успешное создание/чтение/обновление/удаление.
+- Валидация ошибок (422).
+- Проверка прав доступа (403 для недопустимых действий).
+- Фильтрация и пагинация.
+- Каскадное удаление подзадач.
+- Удаление возвращает 204 No Content.
+- Email верификация (логин без верификации возвращает ошибку).
+Используй фабрики моделей, actingAs() для аутентификации.
+Для внешних сервисов (OpenAI, Google) используй Http::fake() или моки.
+```
+
+---
+
+## 12. ПОРЯДОК РАЗРАБОТКИ ДЛЯ ИИ-АГЕНТА
+
+### 12.1. Пошаговый план
+```
+Этап 1: Фундамент
+1.1. Настроить Laravel 13, Sanctum, Reverb, CORS, EnsureJsonResponse middleware
+1.2. Создать базовые классы: BaseResource, BaseCollection
+1.3. Реализовать модуль Auth (регистрация, email верификация, логин, me, профиль)
+
+Этап 2: Ядро
+2.1. Модуль Projects (с миграциями, политикой с явной проверкой owner_id, invite logic с уведомлением)
+2.2. Модуль Tasks (с recurring logic, sorting, aggregates, cascade delete subtasks, recurring_rule валидация)
+2.3. Модуль Comments + Tags + Attachments (с эндпоинтами для комментариев)
+
+Этап 3: Дополнительные функции
+3.1. Модуль Habits (с запретом будущих дат) + Notifications (project_invite тип)
+3.2. Dashboard stats + Search
+3.3. AI Service + Integrations (Telegram, Google)
+
+Этап 4: Инфраструктура
+4.1. Export/Import сервисы
+4.2. Health check endpoint
+4.3. Полный прогон тестов, фикс багов
+```
+
+### 12.2. Шаблон промпта для каждого модуля
+```
+[ROLE] Ты старший Laravel-разработчик, эксперт по API-First архитектуре.
+
+[CONTEXT] Проект TaskSync Team, ТЗ №0 v1.4 + HOTFIX — источник истины для контракта API.
+ТЗ №1 v1.1 — руководство по реализации бэкенда.
+
+[TASK] Создай модуль [НАЗВАНИЕ] согласно спецификации ниже.
+
+[РЕЗУЛЬТАТ]
+1. Миграции (с индексами, внешними ключами, softDeletes где нужно)
+2. Модель (с отношениями, скоупами, casts, enums)
+3. Policy (с методами согласно ACL из ТЗ №0, явная проверка owner_id)
+4. FormRequest (с валидацией из ТЗ №0, включая recurring_rule)
+5. Controller (тонкий, вызывает сервисы, DELETE возвращает 204)
+6. Service/Action (бизнес-логика)
+7. API Resource (формат ответа из ТЗ №0, с computed counts)
+8. Event (если нужно вещание, с project_id в payload)
+9. Feature-тесты (покрытие основных сценариев, включая ACL и каскадное удаление)
+
+[ПРАВИЛА]
+- Используй PHP 8.3 typed properties, readonly classes, enums
+- Не добавляй бизнес-логику в контроллеры
+- Все ответы через BaseResource/BaseCollection (кроме DELETE → 204)
+- Проверяй права через Policy с явной проверкой owner_id
+- Добавляй комментарии только для сложной логики
+- Пиши тесты ПЕРЕД реализацией (TDD-стиль)
+- Для User модели учитывай email_verified_at
+
+[ОГРАНИЧЕНИЯ]
+- Не меняй структуру JSON ответа из ТЗ №0
+- Не добавляй поля в модели, не описанные в ТЗ №0
+- Используй только указанные пакеты из composer.json
+```
+
+---
+
+## 13. ДЕПЛОЙ И МОНТОРИНГ
+
+### 13.1. Production-чеклист
+```bash
+# Оптимизация
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+php artisan event:cache
+
+# Очереди
+php artisan queue:work --sleep=3 --tries=3 --max-time=3600
+
+# WebSockets
+php artisan reverb:start --host=0.0.0.0 --port=8080
+
+# Supervisor config для очереди и reverb
+```
+
+### 13.2. Monitoring
+*   **Health endpoint:** `GET /health` для uptime-мониторинга.
+*   **Logging:** Структурированные логи в JSON (`monolog` handler).
+*   **Error tracking:** Интеграция с Sentry/Logflare (опционально).
+
+---
+
+## ✅ ЧЕК-ЛИСТ ЗАВЕРШЕНИЯ БЭКЕНДА
+
+- [ ] Все модули реализованы согласно ТЗ №0
+- [ ] 100% эндпоинтов покрыты Feature-тестами
+- [ ] Права доступа (ACL) протестированы для всех ролей (owner, admin, member, viewer, author)
+- [ ] Email верификация работает (логин без верификации блокируется)
+- [ ] WebSocket события вещают корректно, авторизация каналов работает
+- [ ] Rate limiting настроен на всех чувствительных эндпоинтах
+- [ ] Формат ответов `{ success, data, meta }` соблюдается везде (кроме DELETE → 204)
+- [ ] Валидация возвращает ошибки в формате ТЗ №0
+- [ ] recurring_rule валидируется
+- [ ] Подзадачи удаляются каскадно
+- [ ] Уведомления создаются при приглашении в проект (type=project_invite)
+- [ ] Документация API авто-генерируется (опционально: Scribe или Postman collection)
+
+---
+

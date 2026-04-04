@@ -1,0 +1,664 @@
+## 5. UI COMPONENTS
+
+### 5.1. Базовые компоненты (src/components/ui/)
+
+**`Button.vue`, `Input.vue`, `Select.vue`, `Modal.vue`, `Dropdown.vue`, `Tooltip.vue`** — с Radix Vue primitives.
+
+### 5.2. Функциональные компоненты (src/components/features/)
+
+**`TaskItem.vue` (с timezone support):**
+```vue
+<script setup lang="ts">
+import type { Task } from '@/types'
+import { useDateFormatter } from '@/composables/useDateFormatter'
+
+interface Props {
+  task: Task
+  showProject?: boolean
+  compact?: boolean
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  showProject: false,
+  compact: false,
+})
+
+const emit = defineEmits<{
+  toggle: [id: number]
+  edit: [id: number]
+  delete: [id: number]
+}>()
+
+const { formatDueRelative, isOverdue } = useDateFormatter()
+
+const priorityColors = {
+  low: 'bg-gray-500',
+  medium: 'bg-blue-500',
+  high: 'bg-amber-500',
+  urgent: 'bg-red-500',
+}
+
+const statusColors = {
+  todo: 'text-blue-600',
+  in_progress: 'text-amber-600',
+  review: 'text-purple-600',
+  done: 'text-green-600 line-through',
+}
+</script>
+
+<template>
+  <div class="group flex items-start gap-3 p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+    <button 
+      @click="emit('toggle', task.id)"
+      class="mt-1 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors"
+      :class="task.status === 'done' ? 'bg-green-500 border-green-500' : 'border-gray-300 dark:border-gray-600'"
+    >
+      <svg v-if="task.status === 'done'" class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
+      </svg>
+    </button>
+    
+    <div class="flex-1 min-w-0">
+      <div class="flex items-center gap-2">
+        <span 
+          class="text-sm font-medium truncate"
+          :class="statusColors[task.status]"
+          @click="emit('edit', task.id)"
+        >
+          {{ task.title }}
+        </span>
+        <span 
+          v-if="task.priority !== 'medium'" 
+          class="w-2 h-2 rounded-full"
+          :class="priorityColors[task.priority]"
+        />
+      </div>
+      
+      <div v-if="!compact" class="flex items-center gap-3 mt-1 text-xs text-gray-500">
+        <span v-if="showProject && task.project">{{ task.project.name }}</span>
+        <span 
+          v-if="task.due_at" 
+          :class="{
+            'text-red-500': isOverdue(task.due_at),
+            'text-gray-500': !isOverdue(task.due_at)
+          }"
+        >
+          {{ formatDueRelative(task.due_at) }}
+        </span>
+        <span v-if="task.comments_count">💬 {{ task.comments_count }}</span>
+        <span v-if="task.attachments_count">📎 {{ task.attachments_count }}</span>
+      </div>
+    </div>
+    
+    <div class="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+      <button @click="emit('edit', task.id)" class="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+        </svg>
+      </button>
+      <button @click="emit('delete', task.id)" class="p-1 hover:bg-red-100 dark:hover:bg-red-900 rounded text-red-600">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</template>
+```
+
+**`TaskForm.vue` (с recurring support — CRITICAL FIX #10):**
+```vue
+<script setup lang="ts">
+import { ref, watch } from 'vue'
+import { useTasksStore } from '@/stores/tasks'
+import { useValidationErrors } from '@/composables/useValidationErrors'
+
+interface Props {
+  defaultData?: Partial<Task>
+  projectId?: number | null
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  defaultData: () => ({}),
+  projectId: undefined,
+})
+
+const emit = defineEmits<{
+  created: []
+  updated: []
+}>()
+
+const tasksStore = useTasksStore()
+const errors = useValidationErrors()
+
+const title = ref(props.defaultData?.title || '')
+const description = ref(props.defaultData?.description || '')
+const priority = ref(props.defaultData?.priority || 'medium')
+const dueAt = ref(props.defaultData?.due_at || '')
+const isRecurring = ref(props.defaultData?.is_recurring || false)
+const recurringRule = ref(props.defaultData?.recurring_rule || 'FREQ=DAILY')
+
+const recurringOptions = [
+  { value: 'FREQ=DAILY', label: 'Ежедневно' },
+  { value: 'FREQ=WEEKLY', label: 'Еженедельно' },
+  { value: 'FREQ=MONTHLY', label: 'Ежемесячно' },
+  { value: 'FREQ=YEARLY', label: 'Ежегодно' },
+]
+
+async function submit() {
+  const payload: Partial<Task> = {
+    title: title.value,
+    description: description.value,
+    priority: priority.value,
+    due_at: dueAt.value || null,
+    is_recurring: isRecurring.value,
+    recurring_rule: isRecurring.value ? recurringRule.value : null,
+    project_id: props.projectId ?? props.defaultData?.project_id ?? null,
+  }
+
+  try {
+    if (props.defaultData?.id) {
+      await tasksStore.updateTask(props.defaultData.id, payload)
+      emit('updated')
+    } else {
+      await tasksStore.createTask(payload)
+      emit('created')
+      // Reset form
+      title.value = ''
+      description.value = ''
+    }
+  } catch {
+    // Error handled in store with rollback
+  }
+}
+</script>
+
+<template>
+  <form @submit.prevent="submit" class="space-y-4">
+    <div>
+      <label class="block text-sm font-medium mb-1">Заголовок *</label>
+      <input 
+        v-model="title" 
+        type="text" 
+        required
+        class="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
+        :class="{ 'border-red-500': errors.title }"
+      />
+      <p v-if="errors.title" class="text-red-500 text-xs mt-1">{{ errors.title[0] }}</p>
+    </div>
+
+    <div>
+      <label class="block text-sm font-medium mb-1">Описание</label>
+      <textarea 
+        v-model="description" 
+        rows="3"
+        class="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
+      />
+    </div>
+
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label class="block text-sm font-medium mb-1">Приоритет</label>
+        <select v-model="priority" class="w-full px-3 py-2 border rounded-md dark:bg-gray-700">
+          <option value="low">Низкий</option>
+          <option value="medium">Средний</option>
+          <option value="high">Высокий</option>
+          <option value="urgent">Срочный</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium mb-1">Срок выполнения</label>
+        <input 
+          v-model="dueAt" 
+          type="datetime-local"
+          class="w-full px-3 py-2 border rounded-md dark:bg-gray-700"
+        />
+      </div>
+    </div>
+
+    <!-- CRITICAL FIX #10: Recurring task fields -->
+    <div class="border-t pt-4">
+      <label class="flex items-center gap-2">
+        <input v-model="isRecurring" type="checkbox" class="rounded" />
+        <span class="text-sm font-medium">Повторяющаяся задача</span>
+      </label>
+
+      <div v-if="isRecurring" class="mt-2">
+        <label class="block text-sm font-medium mb-1">Периодичность</label>
+        <select v-model="recurringRule" class="w-full px-3 py-2 border rounded-md dark:bg-gray-700">
+          <option v-for="option in recurringOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+      </div>
+    </div>
+
+    <button 
+      type="submit" 
+      :disabled="tasksStore.isLoading"
+      class="w-full bg-primary-600 text-white py-2 rounded-md hover:bg-primary-700 disabled:opacity-50"
+    >
+      {{ tasksStore.isLoading ? 'Сохранение...' : (defaultData?.id ? 'Обновить' : 'Создать') }}
+    </button>
+  </form>
+</template>
+```
+
+**`TaskList.vue`, `ProjectCard.vue`, `CommentList.vue`, `AttachmentUploader.vue`, `SearchBar.vue` (CRITICAL FIX #1)** — аналогично.
+
+**`SearchBar.vue` (CRITICAL FIX #1):**
+```vue
+<script setup lang="ts">
+import { ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { useSearchStore } from '@/stores/search'
+
+const router = useRouter()
+const searchStore = useSearchStore()
+const query = ref('')
+
+watch(query, (newQuery) => {
+  searchStore.search(newQuery)
+})
+
+function navigateToResults() {
+  if (query.value.trim()) {
+    router.push({ path: '/search', query: { q: query.value } })
+  }
+}
+
+// Keyboard shortcut for search (press "/" to focus)
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key === '/' && document.activeElement?.tagName !== 'INPUT') {
+    event.preventDefault()
+    ;(event.target as HTMLInputElement).focus()
+  }
+}
+</script>
+
+<template>
+  <div class="relative" @keydown="handleKeydown">
+    <input 
+      v-model="query" 
+      type="text" 
+      placeholder="Поиск... (нажмите /)"
+      class="w-full pl-10 pr-4 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 focus:ring-2 focus:ring-primary-500"
+      @keyup.enter="navigateToResults"
+    />
+    <svg class="absolute left-3 top-2.5 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+    </svg>
+  </div>
+</template>
+```
+
+**`ExportImportButtons.vue` (CRITICAL FIX #2):**
+```vue
+<script setup lang="ts">
+import { ref } from 'vue'
+import { apiClient } from '@/api/client'
+import { useToast } from '@/composables/useToast'
+
+interface Props {
+  projectId: number
+}
+
+const props = defineProps<Props>()
+const { show } = useToast()
+const isImporting = ref(false)
+
+async function exportProject(format: 'json' | 'csv') {
+  try {
+    const response = await apiClient.get(`/projects/${props.projectId}/export`, {
+      params: { format },
+      responseType: 'blob',
+    })
+    
+    const url = window.URL.createObjectURL(new Blob([response.data]))
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', `project-${props.projectId}.${format}`)
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    
+    show('Экспорт успешно выполнен', 'success')
+  } catch {
+    show('Ошибка экспорта', 'error')
+  }
+}
+
+async function importTasks(event: Event) {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file) return
+
+  isImporting.value = true
+  const formData = new FormData()
+  formData.append('file', file)
+
+  try {
+    await apiClient.post('/import', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    show('Импорт успешно выполнен', 'success')
+  } catch {
+    show('Ошибка импорта', 'error')
+  } finally {
+    isImporting.value = false
+    target.value = ''
+  }
+}
+</script>
+
+<template>
+  <div class="flex gap-2">
+    <button @click="exportProject('json')" class="px-3 py-1.5 text-sm border rounded hover:bg-gray-100 dark:hover:bg-gray-800">
+      📥 Экспорт JSON
+    </button>
+    <button @click="exportProject('csv')" class="px-3 py-1.5 text-sm border rounded hover:bg-gray-100 dark:hover:bg-gray-800">
+      📥 Экспорт CSV
+    </button>
+    <label class="px-3 py-1.5 text-sm border rounded hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer">
+      📤 Импорт
+      <input type="file" accept=".json,.csv" @change="importTasks" class="hidden" :disabled="isImporting" />
+    </label>
+  </div>
+</template>
+```
+
+---
+
+## 6. ROUTING & LAYOUTS
+
+### 6.1. Маршруты
+**`src/router/index.ts`:**
+```typescript
+import { createRouter, createWebHistory } from 'vue-router'
+import type { RouteRecordRaw } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+
+const routes: RouteRecordRaw[] = [
+  {
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/pages/auth/LoginPage.vue'),
+    meta: { requiresGuest: true },
+  },
+  {
+    path: '/register',
+    name: 'Register',
+    component: () => import('@/pages/auth/RegisterPage.vue'),
+    meta: { requiresGuest: true },
+  },
+  {
+    path: '/',
+    component: () => import('@/layouts/AppLayout.vue'),
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: '',
+        name: 'Inbox',
+        component: () => import('@/pages/tasks/InboxPage.vue'),
+      },
+      {
+        path: 'today',
+        name: 'Today',
+        component: () => import('@/pages/tasks/TodayPage.vue'),
+      },
+      {
+        path: 'projects',
+        name: 'Projects',
+        component: () => import('@/pages/projects/ProjectsPage.vue'),
+      },
+      {
+        path: 'projects/:id',
+        name: 'ProjectDetail',
+        component: () => import('@/pages/projects/ProjectDetailPage.vue'),
+      },
+      {
+        path: 'tasks/:id',
+        name: 'TaskDetail',
+        component: () => import('@/pages/tasks/TaskDetailPage.vue'),
+      },
+      {
+        path: 'habits',
+        name: 'Habits',
+        component: () => import('@/pages/habits/HabitsPage.vue'),
+      },
+      {
+        path: 'search',
+        name: 'Search',
+        component: () => import('@/pages/search/SearchPage.vue'), // CRITICAL FIX #1
+      },
+      {
+        path: 'settings',
+        name: 'Settings',
+        component: () => import('@/pages/settings/SettingsPage.vue'),
+        children: [
+          { path: 'profile', component: () => import('@/pages/settings/ProfileSettings.vue') },
+          { path: 'integrations', component: () => import('@/pages/settings/IntegrationsSettings.vue') }, // CRITICAL FIX #9
+        ],
+      },
+    ],
+  },
+]
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes,
+})
+
+router.beforeEach(async (to, from, next) => {
+  const authStore = useAuthStore()
+  
+  if (!authStore.user) {
+    await authStore.fetchMe()
+  }
+
+  if (to.meta.requiresAuth && !authStore.isAuthenticated) {
+    next('/login')
+  } else if (to.meta.requiresGuest && authStore.isAuthenticated) {
+    next('/')
+  } else {
+    next()
+  }
+})
+
+export default router
+```
+
+### 6.2. Layouts
+
+**`src/layouts/AppLayout.vue`:**
+```vue
+<script setup lang="ts">
+import { onMounted } from 'vue'
+import Sidebar from '@/components/layout/Sidebar.vue'
+import Header from '@/components/layout/Header.vue'
+import { useTasksStore } from '@/stores/tasks'
+import { useAuthStore } from '@/stores/auth'
+
+const tasksStore = useTasksStore()
+const authStore = useAuthStore()
+
+onMounted(() => {
+  // Setup WebSocket after auth is loaded
+  if (authStore.isAuthenticated && authStore.user) {
+    tasksStore.setupRealtime(authStore.user.id)
+  }
+})
+</script>
+
+<template>
+  <div class="flex h-screen bg-gray-50 dark:bg-gray-900">
+    <Sidebar />
+    <div class="flex-1 flex flex-col overflow-hidden">
+      <Header />
+      <main class="flex-1 overflow-y-auto p-6">
+        <router-view />
+      </main>
+    </div>
+  </div>
+</template>
+```
+
+**`src/layouts/AuthLayout.vue`:** (центрованная форма логина/регистрации)
+
+---
+
+## 7. PAGES
+
+### 7.1. Search Page (CRITICAL FIX #1)
+**`src/pages/search/SearchPage.vue`:**
+```vue
+<script setup lang="ts">
+import { onMounted, computed } from 'vue'
+import { useRoute } from 'vue-router'
+import { useSearchStore } from '@/stores/search'
+import TaskItem from '@/components/features/TaskItem.vue'
+import ProjectCard from '@/components/features/ProjectCard.vue'
+
+const route = useRoute()
+const searchStore = useSearchStore()
+
+onMounted(() => {
+  const query = route.query.q as string
+  if (query) {
+    searchStore.search(query)
+  }
+})
+
+const hasResults = computed(() => {
+  return searchStore.results && (
+    searchStore.results.tasks?.length > 0 ||
+    searchStore.results.projects?.length > 0 ||
+    searchStore.results.habits?.length > 0
+  )
+})
+</script>
+
+<template>
+  <div class="max-w-6xl mx-auto">
+    <h1 class="text-2xl font-bold mb-6">
+      🔍 Поиск: "{{ route.query.q }}"
+    </h1>
+
+    <div v-if="searchStore.isLoading" class="text-center py-12">
+      <div class="animate-spin w-8 h-8 border-4 border-primary-500 border-t-transparent rounded-full mx-auto"></div>
+    </div>
+
+    <div v-else-if="!hasResults" class="text-center py-12 text-gray-500">
+      Ничего не найдено
+    </div>
+
+    <div v-else class="space-y-8">
+      <section v-if="searchStore.results?.tasks?.length">
+        <h2 class="text-lg font-semibold mb-3">Задачи ({{ searchStore.results.tasks.length }})</h2>
+        <div class="space-y-2">
+          <TaskItem 
+            v-for="task in searchStore.results.tasks" 
+            :key="task.id" 
+            :task="task"
+            @edit="/* navigate */"
+          />
+        </div>
+      </section>
+
+      <section v-if="searchStore.results?.projects?.length">
+        <h2 class="text-lg font-semibold mb-3">Проекты ({{ searchStore.results.projects.length }})</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <ProjectCard 
+            v-for="project in searchStore.results.projects" 
+            :key="project.id" 
+            :project="project"
+          />
+        </div>
+      </section>
+    </div>
+  </div>
+</template>
+```
+
+### 7.2. Settings Page with Integrations (CRITICAL FIX #9)
+**`src/pages/settings/IntegrationsSettings.vue`:**
+```vue
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import { apiClient } from '@/api/client'
+import { useToast } from '@/composables/useToast'
+
+interface Integration {
+  provider: string
+  name: string
+  connected: boolean
+  connectedAt: string | null
+}
+
+const { show } = useToast()
+const integrations = ref<Integration[]>([])
+
+onMounted(async () => {
+  const { data } = await apiClient.get('/integrations')
+  integrations.value = data.data
+})
+
+async function connect(provider: string) {
+  // OAuth redirect
+  window.location.href = `/api/v1/integrations/${provider}/connect`
+}
+
+async function disconnect(provider: string) {
+  try {
+    await apiClient.delete(`/integrations/${provider}/disconnect`)
+    const integration = integrations.value.find(i => i.provider === provider)
+    if (integration) integration.connected = false
+    show('Интеграция отключена', 'success')
+  } catch {
+    show('Ошибка отключения', 'error')
+  }
+}
+</script>
+
+<template>
+  <div class="max-w-4xl mx-auto">
+    <h1 class="text-2xl font-bold mb-6">🔌 Интеграции</h1>
+
+    <div class="space-y-4">
+      <div 
+        v-for="integration in integrations" 
+        :key="integration.provider"
+        class="flex items-center justify-between p-4 border rounded-lg dark:border-gray-700"
+      >
+        <div>
+          <h3 class="font-semibold">{{ integration.name }}</h3>
+          <p class="text-sm text-gray-500">
+            {{ integration.connected ? `Подключено: ${integration.connectedAt}` : 'Не подключено' }}
+          </p>
+        </div>
+
+        <button 
+          v-if="integration.connected"
+          @click="disconnect(integration.provider)"
+          class="px-4 py-2 text-sm border border-red-500 text-red-500 rounded hover:bg-red-50 dark:hover:bg-red-900"
+        >
+          Отключить
+        </button>
+        <button 
+          v-else
+          @click="connect(integration.provider)"
+          class="px-4 py-2 text-sm bg-primary-600 text-white rounded hover:bg-primary-700"
+        >
+          Подключить
+        </button>
+      </div>
+    </div>
+  </div>
+</template>
+```
+
+**`src/pages/habits/HabitsPage.vue`:** (трекер привычек с календарём выполнений)
+
+---
+

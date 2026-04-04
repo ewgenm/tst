@@ -1,0 +1,270 @@
+## 8. ТЕСТИРОВАНИЕ
+
+### 8.1. Настройка Vitest
+**`vitest.config.ts`:**
+```typescript
+import { defineConfig } from 'vitest/config'
+import vue from '@vitejs/plugin-vue'
+import { resolve } from 'path'
+
+export default defineConfig({
+  plugins: [vue()],
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+  },
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, 'src'),
+    },
+  },
+})
+```
+
+### 8.2. Пример теста компонента
+**`src/components/features/__tests__/TaskItem.test.ts`:**
+```typescript
+import { describe, it, expect, vi } from 'vitest'
+import { mount } from '@vue/test-utils'
+import TaskItem from '../TaskItem.vue'
+import type { Task } from '@/types'
+
+const mockTask: Task = {
+  id: 1,
+  title: 'Test Task',
+  status: 'todo',
+  priority: 'medium',
+  project_id: null,
+  parent_task_id: null,
+  description: null,
+  due_at: null,
+  position: 0,
+  assignee_id: null,
+  created_by: 1,
+  is_recurring: false,
+  recurring_rule: null,
+  created_at: '2026-04-03T10:00:00Z',
+  updated_at: '2026-04-03T10:00:00Z',
+  deleted_at: null,
+}
+
+describe('TaskItem', () => {
+  it('renders task title correctly', () => {
+    const wrapper = mount(TaskItem, { props: { task: mockTask } })
+    expect(wrapper.text()).toContain('Test Task')
+  })
+
+  it('emits toggle event on checkbox click', async () => {
+    const wrapper = mount(TaskItem, { props: { task: mockTask } })
+    await wrapper.find('button').trigger('click')
+    expect(wrapper.emitted('toggle')).toHaveLength(1)
+    expect(wrapper.emitted('toggle')?.[0]).toEqual([1])
+  })
+
+  it('shows done style when status is done', () => {
+    const doneTask = { ...mockTask, status: 'done' as const }
+    const wrapper = mount(TaskItem, { props: { task: doneTask } })
+    expect(wrapper.classes()).toContain('line-through')
+  })
+})
+```
+
+### 8.3. Пример теста Store (CRITICAL FIX #16)
+**`src/stores/__tests__/tasks.test.ts`:**
+```typescript
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { useTasksStore } from '../tasks'
+import { apiClient } from '@/api/client'
+
+vi.mock('@/api/client', () => ({
+  apiClient: {
+    get: vi.fn(),
+    post: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn(),
+  },
+}))
+
+describe('Tasks Store', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('fetches tasks successfully', async () => {
+    const mockTasks = [{ id: 1, title: 'Test' }]
+    vi.mocked(apiClient.get).mockResolvedValue({
+      data: { data: mockTasks, pagination: { total: 1 } }
+    })
+
+    const store = useTasksStore()
+    await store.fetchTasks()
+
+    expect(store.tasks).toEqual(mockTasks)
+    expect(apiClient.get).toHaveBeenCalledWith('/tasks', { params: {} })
+  })
+
+  it('rolls back on create error', async () => {
+    vi.mocked(apiClient.post).mockRejectedValue(new Error('API Error'))
+    
+    const store = useTasksStore()
+    const initialLength = store.tasks.length
+
+    try {
+      await store.createTask({ title: 'New Task' })
+    } catch {
+      // Expected
+    }
+
+    // Task should be rolled back
+    expect(store.tasks.length).toBe(initialLength)
+  })
+})
+```
+
+---
+
+## 9. ПОРЯДОК РАЗРАБОТКИ ДЛЯ ИИ-АГЕНТА
+
+### 9.1. Пошаговый план
+```
+Этап 1: Фундамент
+1.1. Настроить Vite + Vue 3 + TS + Tailwind + PWA plugin
+1.2. Создать базовые типы (синхрон с ТЗ №0)
+1.3. Настроить API client с интерцепторами (CSRF, error handling, retry)
+1.4. Создать Pinia stores (auth, ui)
+1.5. Реализовать Auth модуль (login, register, me, email verification)
+
+Этап 2: Layout & Navigation
+2.1. AppLayout (Sidebar, Header)
+2.2. Theme toggle (dark/light/system) с синхронизацией с БД
+2.3. Router guards (requiresAuth)
+2.4. SearchBar компонент с дебаунсом
+
+Этап 3: Tasks Module
+3.1. TaskList, TaskItem компоненты (с timezone support)
+3.2. TaskForm компонент (с recurring fields)
+3.3. Tasks store с CRUD + optimistic updates + rollback
+3.4. Inbox, Today страницы
+3.5. TaskDetail страница с комментариями и вложениями
+3.6. Drag & Drop сортировка (vuedraggable)
+
+Этап 4: Projects Module
+4.1. ProjectCard, ProjectList компоненты
+4.2. Projects store с CRUD
+4.3. ProjectDetail страница
+4.4. Members management (invite, accept, remove)
+4.5. Export/Import компоненты
+
+Этап 5: Дополнительные модули
+5.1. Habits store + HabitsPage
+5.2. Notifications store + NotificationBell компонент
+5.3. Search store + SearchPage
+5.4. Settings (profile, theme, integrations)
+
+Этап 6: Real-time & Polish
+6.1. WebSocket integration (Echo) с подпиской на project channels
+6.2. Optimistic updates с откатами
+6.3. Toast notifications
+6.4. Loading states (skeleton loaders), virtual scroll для длинных списков
+6.5. Field-level validation errors
+6.6. Тесты критических компонентов и stores
+```
+
+### 9.2. Шаблон промпта для каждого модуля
+```
+[ROLE] Ты старший Vue-разработчик, эксперт по TypeScript и Composition API.
+
+[CONTEXT] Проект TaskSync Team.
+ТЗ №0 v1.4 + HOTFIX — API контракт (типы, эндпоинты).
+ТЗ №1 v1.1 — Backend спецификация.
+ТЗ №2 v1.1 — Frontend руководство (этот документ).
+
+[TASK] Создай модуль [НАЗВАНИЕ] для Vue 3 + TS.
+
+[РЕЗУЛЬТАТ]
+1. Типы (src/types/) — синхрон с ТЗ №0
+2. Store (src/stores/) — Pinia с CRUD действиями + optimistic updates + rollback
+3. Components (src/components/features/) — переиспользуемые
+4. Pages (src/pages/) — route views
+5. Composables (src/composables/) — reusable логика (useDateFormatter, useWebSocket)
+6. Тесты (src/**/__tests__/) — Vitest для компонентов и stores
+
+[ПРАВИЛА]
+- Используй <script setup lang="ts">
+- Все props, emits, store state — строго типизированы
+- API вызовы через apiClient с обработкой ошибок (422 field-level, 429 retry)
+- Оптимистичные обновления с откатом при ошибке
+- Tailwind для стилей, Radix Vue для доступности
+- Темная тема через класс .dark на <html>
+- Даты конвертировать через date-fns-tz (UTC ↔ user timezone)
+- WebSocket без Bearer token (Sanctum cookies)
+
+[ОГРАНИЧЕНИЯ]
+- Не меняй структуру API запросов из ТЗ №0
+- Не добавляй поля не описанные в типах
+- Избегай Options API
+- Для Drag & Drop используй vuedraggable
+```
+
+---
+
+## 10. ДЕПЛОЙ И ОПТИМИЗАЦИЯ
+
+### 10.1. Production build
+```bash
+npm run build
+# Output: dist/ с оптимизированными бандлами
+```
+
+### 10.2. Оптимизации
+*   **Code splitting:** Lazy loading роутов (`component: () => import()`).
+*   **Tree shaking:** Unused exports удаляются автоматически.
+*   **Image optimization:** Использовать WebP, lazy loading.
+*   **PWA:** Service Worker для offline доступа (через Vite PWA plugin).
+*   **Virtual scroll:** `vue-virtual-scroller` для списков >100 элементов.
+*   **Skeleton loaders:** Для всех async состояний.
+
+### 10.3. Capacitor (Mobile/Desktop)
+```bash
+npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/ios
+npx cap init TaskSyncTeam com.tasksync.app
+npx cap add android
+npx cap add ios
+npx cap sync
+```
+
+**Для Windows (Tauri):**
+```bash
+npm install @tauri-apps/cli
+npx tauri init
+```
+
+---
+
+## ✅ ЧЕК-ЛИСТ ЗАВЕРШЕНИЯ ФРОНТЕНДА
+
+- [ ] Все модули реализованы согласно ТЗ №0
+- [ ] Типы TypeScript синхронизированы с API контрактом
+- [ ] Темная/светлая тема работает корректно
+- [ ] WebSocket подключения работают (user + project channels)
+- [ ] Оптимистичные обновления с откатами реализованы
+- [ ] Обработка ошибок API с field-level валидацией (422)
+- [ ] Rate limiting retry logic (429)
+- [ ] Часовые пояса конвертируются (UTC ↔ user timezone)
+- [ ] Поиск реализован (SearchBar + SearchPage + Store)
+- [ ] Экспорт/Импорт работают
+- [ ] Habits и Notifications stores созданы
+- [ ] Recurring task поля в TaskForm
+- [ ] Интеграции страница (Telegram, Google OAuth)
+- [ ] Responsive дизайн (mobile, tablet, desktop)
+- [ ] Accessibility (ARIA labels, keyboard navigation)
+- [ ] Критические компоненты покрыты тестами (components + stores)
+- [ ] Production build проходит без ошибок
+- [ ] PWA Service Worker настроен
+- [ ] Skeleton loaders и virtual scroll для длинных списков
+- [ ] Capacitor/Tauri сборка работает (для mobile/desktop)
+
+---

@@ -17,6 +17,10 @@ return new class extends Migration
             $table->string('email')->unique();
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
+            $table->string('avatar_url')->nullable();
+            $table->string('timezone')->default('Europe/Moscow');
+            $table->string('locale')->default('ru');
+            $table->enum('theme', ['light', 'dark', 'system'])->default('system');
             $table->rememberToken();
             $table->timestamps();
         });

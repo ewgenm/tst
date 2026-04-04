@@ -1,0 +1,419 @@
+### 3.3. Projects Store
+(аналогично tasks, с CRUD для проектов, members, invites)
+
+### 3.4. Habits Store (CRITICAL FIX #4)
+**`src/stores/habits.ts`:**
+```typescript
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
+import type { Habit } from '@/types'
+import { apiClient } from '@/api/client'
+
+export const useHabitsStore = defineStore('habits', () => {
+  const habits = ref<Habit[]>([])
+  const isLoading = ref(false)
+
+  async function fetchHabits() {
+    isLoading.value = true
+    try {
+      const { data } = await apiClient.get('/habits')
+      habits.value = data.data
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  async function logCompletion(habitId: number, date?: string) {
+    const { data } = await apiClient.post(`/habits/${habitId}/log`, { date })
+    const index = habits.value.findIndex(h => h.id === habitId)
+    if (index !== -1) habits.value[index] = data.data
+    return data.data
+  }
+
+  async function deleteHabit(id: number) {
+    await apiClient.delete(`/habits/${id}`)
+    habits.value = habits.value.filter(h => h.id !== id)
+  }
+
+  return {
+    habits,
+    isLoading,
+    fetchHabits,
+    logCompletion,
+    deleteHabit,
+  }
+})
+```
+
+### 3.5. Notifications Store (CRITICAL FIX #4)
+**`src/stores/notifications.ts`:**
+```typescript
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import type { Notification } from '@/types'
+import { apiClient } from '@/api/client'
+
+export const useNotificationsStore = defineStore('notifications', () => {
+  const notifications = ref<Notification[]>([])
+  const unreadCount = ref(0)
+  const isLoading = ref(false)
+
+  const unreadNotifications = computed(() => notifications.value.filter(n => !n.is_read))
+
+  async function fetchNotifications() {
+    isLoading.value = true
+    try {
+      const { data } = await apiClient.get('/notifications')
+      notifications.value = data.data
+      unreadCount.value = data.data.filter((n: Notification) => !n.is_read).length
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  async function markAsRead(id: number) {
+    await apiClient.put(`/notifications/${id}/read`)
+    const notification = notifications.value.find(n => n.id === id)
+    if (notification) notification.is_read = true
+    unreadCount.value = Math.max(0, unreadCount.value - 1)
+  }
+
+  async function markAllAsRead() {
+    await apiClient.put('/notifications/read-all')
+    notifications.value.forEach(n => n.is_read = true)
+    unreadCount.value = 0
+  }
+
+  return {
+    notifications,
+    unreadCount,
+    unreadNotifications,
+    fetchNotifications,
+    markAsRead,
+    markAllAsRead,
+  }
+})
+```
+
+### 3.6. Search Store (CRITICAL FIX #1)
+**`src/stores/search.ts`:**
+```typescript
+import { defineStore } from 'pinia'
+import { ref, debounce } from 'vue'
+import type { SearchResult } from '@/types'
+import { apiClient } from '@/api/client'
+
+export const useSearchStore = defineStore('search', () => {
+  const results = ref<SearchResult | null>(null)
+  const isLoading = ref(false)
+  const query = ref('')
+
+  const search = debounce(async (searchQuery: string, types: string[] = ['tasks', 'projects', 'habits']) => {
+    if (!searchQuery.trim()) {
+      results.value = null
+      return
+    }
+
+    isLoading.value = true
+    query.value = searchQuery
+
+    try {
+      const { data } = await apiClient.get('/search', {
+        params: { q: searchQuery, types: types.join(',') }
+      })
+      results.value = data.data
+    } finally {
+      isLoading.value = false
+    }
+  }, 300) // 300ms debounce
+
+  function clearResults() {
+    results.value = null
+    query.value = ''
+  }
+
+  return {
+    results,
+    isLoading,
+    query,
+    search,
+    clearResults,
+  }
+})
+```
+
+### 3.7. UI Store
+**`src/stores/ui.ts`:**
+```typescript
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
+
+export const useUIStore = defineStore('ui', () => {
+  const sidebarCollapsed = ref(false)
+  const currentModal = ref<string | null>(null)
+  const theme = ref<'light' | 'dark' | 'system'>('system')
+
+  function toggleSidebar() {
+    sidebarCollapsed.value = !sidebarCollapsed.value
+  }
+
+  function openModal(name: string) {
+    currentModal.value = name
+  }
+
+  function closeModal() {
+    currentModal.value = null
+  }
+
+  function setTheme(newTheme: 'light' | 'dark' | 'system') {
+    theme.value = newTheme
+    localStorage.setItem('theme', newTheme)
+    applyTheme(newTheme)
+  }
+
+  function applyTheme(newTheme: 'light' | 'dark' | 'system') {
+    const html = document.documentElement
+    if (newTheme === 'system') {
+      const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      html.classList.toggle('dark', systemDark)
+    } else {
+      html.classList.toggle('dark', newTheme === 'dark')
+    }
+  }
+
+  // Initialize theme on load
+  const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | 'system' | null
+  if (savedTheme) {
+    setTheme(savedTheme)
+  }
+
+  return {
+    sidebarCollapsed,
+    currentModal,
+    theme,
+    toggleSidebar,
+    openModal,
+    closeModal,
+    setTheme,
+  }
+})
+```
+
+---
+
+## 4. COMPOSABLES
+
+### 4.1. useDateFormatter (CRITICAL FIX #3)
+**`src/composables/useDateFormatter.ts`:**
+```typescript
+import { format, formatDistanceToNow, parseISO } from 'date-fns'
+import { toZonedTime, format as formatTz } from 'date-fns-tz'
+import { computed } from 'vue'
+import { useAuthStore } from '@/stores/auth'
+import { ru, enUS } from 'date-fns/locale'
+
+export function useDateFormatter() {
+  const authStore = useAuthStore()
+  const userTimezone = computed(() => authStore.userTimezone || 'UTC')
+  const userLocale = computed(() => authStore.userLocale || 'ru') // CRITICAL FIX #13
+
+  const localeMap: Record<string, any> = {
+    ru,
+    en: enUS,
+    enUS: enUS,
+  }
+
+  const locale = computed(() => localeMap[userLocale.value] || ru)
+
+  function formatDueDate(utcDateString: string | null, formatStr: string = 'dd MMM yyyy, HH:mm'): string {
+    if (!utcDateString) return 'Без срока'
+    
+    const date = parseISO(utcDateString)
+    const zonedDate = toZonedTime(date, userTimezone.value)
+    return formatTz(zonedDate, formatStr, { timeZone: userTimezone.value, locale: locale.value })
+  }
+
+  function formatDueRelative(utcDateString: string | null): string {
+    if (!utcDateString) return ''
+    
+    const date = parseISO(utcDateString)
+    const zonedDate = toZonedTime(date, userTimezone.value)
+    return formatDistanceToNow(zonedDate, { 
+      addSuffix: true, 
+      locale: locale.value 
+    })
+  }
+
+  function isOverdue(utcDateString: string | null): boolean {
+    if (!utcDateString) return false
+    const date = parseISO(utcDateString)
+    return date < new Date()
+  }
+
+  // Convert local date to UTC for API (CRITICAL FIX #3)
+  function localToUTC(localDate: Date, timezone: string): string {
+    const zonedDate = toZonedTime(localDate, timezone)
+    return zonedDate.toISOString()
+  }
+
+  return {
+    formatDueDate,
+    formatDueRelative,
+    isOverdue,
+    localToUTC,
+    userTimezone,
+    userLocale,
+  }
+}
+```
+
+### 4.2. useWebSocket (CRITICAL FIX #11)
+**`src/composables/useWebSocket.ts`:**
+```typescript
+import Echo from 'laravel-echo'
+import Pusher from 'pusher-js'
+import { computed } from 'vue'
+import { useAuthStore } from '@/stores/auth'
+
+let echo: Echo | null = null
+
+export function useWebSocket() {
+  const authStore = useAuthStore()
+
+  function init() {
+    if (echo) return
+    
+    echo = new Echo({
+      broadcaster: 'reverb',
+      key: import.meta.env.VITE_REVERB_APP_KEY,
+      wsHost: import.meta.env.VITE_REVERB_HOST,
+      wsPort: import.meta.env.VITE_REVERB_PORT ?? 8080,
+      wssPort: import.meta.env.VITE_REVERB_PORT ?? 443,
+      forceTLS: (import.meta.env.VITE_REVERB_SCHEME ?? 'https') === 'https',
+      enabledTransports: ['ws', 'wss'],
+      // CRITICAL FIX #11: Sanctum uses cookies, not Bearer tokens
+      // Remove auth.headers - Echo will automatically send cookies
+    })
+  }
+
+  function subscribe(channelPattern: string, event: string, callback: (payload: any) => void) {
+    if (!echo) init()
+    
+    const channelName = channelPattern.replace('${userId}', String(authStore.user?.id))
+    echo?.channel(channelName).listen(event, callback)
+  }
+
+  function leaveChannel(channel: string) {
+    echo?.leave(channel)
+  }
+
+  return { init, subscribe, leaveChannel }
+}
+```
+
+### 4.3. useDragDrop (CRITICAL FIX #8)
+**`src/composables/useDragDrop.ts`:**
+```typescript
+import { ref } from 'vue'
+import type { Task } from '@/types'
+
+export function useDragDrop() {
+  const draggedTask = ref<Task | null>(null)
+
+  function onDragStart(task: Task) {
+    draggedTask.value = task
+  }
+
+  function onDragEnd() {
+    draggedTask.value = null
+  }
+
+  function onDrop(targetTask: Task, position: 'before' | 'after') {
+    if (!draggedTask.value || draggedTask.value.id === targetTask.id) return
+    
+    // Calculate new position (CRITICAL FIX #8)
+    const newPosition = position === 'before' 
+      ? targetTask.position - 0.5 
+      : targetTask.position + 0.5
+    
+    return {
+      taskId: draggedTask.value.id,
+      newPosition,
+    }
+  }
+
+  return {
+    draggedTask,
+    onDragStart,
+    onDragEnd,
+    onDrop,
+  }
+}
+```
+
+**Рекомендуемая библиотека для Drag & Drop:** `vuedraggable` (обертка над Sortable.js)
+
+```vue
+<!-- Пример использования в TaskList.vue -->
+<script setup lang="ts">
+import draggable from 'vuedraggable'
+import { useTasksStore } from '@/stores/tasks'
+
+const tasksStore = useTasksStore()
+
+async function onSortEnd() {
+  // Update positions on backend
+  for (let i = 0; i < tasksStore.tasks.length; i++) {
+    await tasksStore.reorderTask(tasksStore.tasks[i].id, i * 1000)
+  }
+}
+</script>
+
+<template>
+  <draggable 
+    v-model="tasksStore.tasks" 
+    item-key="id"
+    @end="onSortEnd"
+  >
+    <template #item="{ element }">
+      <TaskItem :task="element" />
+    </template>
+  </draggable>
+</template>
+```
+
+### 4.4. useToast
+**`src/composables/useToast.ts`:** (глобальные toast уведомления)
+
+### 4.5. useValidationErrors (CRITICAL FIX #6)
+**`src/composables/useValidationErrors.ts`:**
+```typescript
+import { ref, onMounted, onUnmounted } from 'vue'
+import type { Ref } from 'vue'
+
+export function useValidationErrors(): Ref<Record<string, string[]>> {
+  const errors = ref<Record<string, string[]>>({})
+
+  function handleValidationErrors(event: Event) {
+    const customEvent = event as CustomEvent<Record<string, string[]>>
+    errors.value = customEvent.detail
+  }
+
+  onMounted(() => {
+    window.addEventListener('validation-errors', handleValidationErrors)
+  })
+
+  onUnmounted(() => {
+    window.removeEventListener('validation-errors', handleValidationErrors)
+  })
+
+  function clearErrors() {
+    errors.value = {}
+  }
+
+  return errors
+}
+```
+
+---
+
