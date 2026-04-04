@@ -19,12 +19,22 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        // API middleware group
+        // API middleware group (with Sanctum for SPA auth)
         $middleware->group('api', [
             HandleCors::class,
             EnsureJsonResponse::class,
             EnsureFrontendRequestsAreStateful::class, // Sanctum SPA authentication
-            // 'throttle:api', // Rate limiting (настроим позже)
+        ]);
+
+        // Public API middleware group (NO Sanctum - for external clients)
+        $middleware->group('public-api', [
+            HandleCors::class,
+            EnsureJsonResponse::class,
+        ]);
+
+        // Alias for public-api routes
+        $middleware->alias([
+            'public-api' => \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

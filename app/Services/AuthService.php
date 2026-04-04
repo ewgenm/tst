@@ -20,7 +20,6 @@ class AuthService
      */
     public function register(array $data): User
     {
-        /** @var User $user */
         $user = User::create([
             'name' => $data['name'],
             'email' => $data['email'],
@@ -28,10 +27,13 @@ class AuthService
             'timezone' => $data['timezone'] ?? 'Europe/Moscow',
             'locale' => $data['locale'] ?? 'ru',
             'theme' => $data['theme'] ?? 'system',
+            'email_verified_at' => isset($data['verified']) && filter_var($data['verified'], FILTER_VALIDATE_BOOLEAN) ? now() : null,
         ]);
 
-        // Отправка письма для подтверждения email
-        $user->sendEmailVerificationNotification();
+        // Отправка письма для подтверждения email (только если не verified)
+        if (!$user->hasVerifiedEmail()) {
+            $user->sendEmailVerificationNotification();
+        }
 
         return $user;
     }

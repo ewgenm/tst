@@ -27,13 +27,26 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::prefix('v1')->group(function () {
-    
+
     // ========================================
-    // 3.1. Auth & Profile (public)
+    // 3.1. Auth & Profile (public - NO Sanctum for external API access)
     // ========================================
     Route::prefix('auth')->group(function () {
-        Route::post('/register', [AuthController::class, 'register']);
-        Route::post('/login', [AuthController::class, 'login']);
+        Route::post('/register', [AuthController::class, 'register'])
+            ->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
+        Route::post('/login', [AuthController::class, 'login'])
+            ->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
+        Route::get('/verify/{id}/{hash}', function ($id, $hash) {
+            $user = \App\Models\User::findOrFail($id);
+            if (!hash_equals(sha1($user->getEmailForVerification()), $hash)) {
+                abort(403, 'Invalid verification link');
+            }
+            if ($user->hasVerifiedEmail()) {
+                return response()->json(['success' => true, 'data' => ['message' => 'Email уже подтверждён']]);
+            }
+            $user->markEmailAsVerified();
+            return response()->json(['success' => true, 'data' => ['message' => 'Email успешно подтверждён']]);
+        })->name('verification.verify');
     });
 
     // ========================================
