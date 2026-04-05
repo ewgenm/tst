@@ -19,11 +19,11 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        // API middleware group (with Sanctum for SPA auth)
+        // API middleware group (CORS, JSON response)
+        // Note: Sanctum stateful middleware removed - handled per-route
         $middleware->group('api', [
             HandleCors::class,
             EnsureJsonResponse::class,
-            EnsureFrontendRequestsAreStateful::class, // Sanctum SPA authentication
         ]);
 
         // Public API middleware group (NO Sanctum - for external clients)

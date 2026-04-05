@@ -67,10 +67,4 @@ onMounted(async () => {
 })
 
 onUnmounted(() => { ws.disconnect() })
-
-window.addEventListener('auth:unauthorized', () => {
-  authStore.logout()
-  ws.disconnect()
-  window.location.href = '/login'
-})
 </script>

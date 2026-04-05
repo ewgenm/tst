@@ -29,11 +29,15 @@ class AuthController extends Controller
     {
         $user = $this->authService->register($request->validated());
 
+        // Создаём токен для нового пользователя
+        $token = $user->createToken('spa-token')->plainTextToken;
+
         return response()->json([
             'success' => true,
             'data' => [
                 'user' => new UserResource($user),
-                'message' => 'Регистрация успешна. Пожалуйста, проверьте ваш email для подтверждения.',
+                'token' => $token,
+                'message' => 'Регистрация успешна.',
             ],
             'meta' => ['timestamp' => now()->toISOString()],
         ], 201);
@@ -51,14 +55,14 @@ class AuthController extends Controller
             $request->validated('password')
         );
 
-        // Создаём сессию для Sanctum SPA аутентификации
-        \Illuminate\Support\Facades\Auth::guard('web')->login($user);
-        $request->session()->regenerate();
+        // Создаём Sanctum токен для SPA
+        $token = $user->createToken('spa-token')->plainTextToken;
 
         return response()->json([
             'success' => true,
             'data' => [
                 'user' => new UserResource($user),
+                'token' => $token,
                 'message' => 'Вход выполнен успешно',
             ],
             'meta' => ['timestamp' => now()->toISOString()],
@@ -72,9 +76,8 @@ class AuthController extends Controller
      */
     public function logout(Request $request): JsonResponse
     {
-        $request->user()->tokens()->delete();
-        $request->session()->invalidate();
-        $request->session()->regenerateToken();
+        // Удаляем текущий токен
+        $request->user()->currentAccessToken()->delete();
 
         return response()->json([
             'success' => true,

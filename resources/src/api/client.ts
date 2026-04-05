@@ -67,15 +67,19 @@ apiClient.interceptors.response.use(
     }
 
     // ==========================================================
-    // Unauthorized (401) — не редиректим на auth страницах
+    // Unauthorized (401) — очищаем токен и редиректим на логин
     // ==========================================================
     if (error.response?.status === 401) {
-      const isAuthPage = window.location.pathname === '/login' || 
+      // Очищаем токен
+      localStorage.removeItem('tasksync_auth_token')
+      delete apiClient.defaults.headers.common['Authorization']
+
+      const isAuthPage = window.location.pathname === '/login' ||
                          window.location.pathname === '/register'
 
       if (!isAuthPage) {
         showToast?.('Сессия истекла. Пожалуйста, войдите снова.', 'error')
-        window.dispatchEvent(new CustomEvent('auth:unauthorized'))
+        window.location.href = '/login'
       }
       return Promise.reject(error)
     }

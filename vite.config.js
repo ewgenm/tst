@@ -29,5 +29,15 @@ export default defineConfig({
         watch: {
             ignored: ['**/storage/framework/views/**'],
         },
+        proxy: {
+            '/api': {
+                target: 'http://tst.test',
+                changeOrigin: true,
+            },
+            '/sanctum': {
+                target: 'http://tst.test',
+                changeOrigin: true,
+            },
+        },
     },
 });

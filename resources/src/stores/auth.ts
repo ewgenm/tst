@@ -9,12 +9,31 @@ import { apiClient } from '@/api/client'
 import { endpoints } from '@/api/endpoints'
 import { useUIStore } from '@/stores/ui'
 
+// Ключи для localStorage
+const TOKEN_KEY = 'tasksync_auth_token'
+
+// Устанавливаем токен в заголовки axios
+function setAuthHeader(token: string | null) {
+  if (token) {
+    apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`
+  } else {
+    delete apiClient.defaults.headers.common['Authorization']
+  }
+}
+
+// Инициализация токена при загрузке
+const savedToken = localStorage.getItem(TOKEN_KEY)
+if (savedToken) {
+  setAuthHeader(savedToken)
+}
+
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
+  const token = ref<string | null>(savedToken)
   const isLoading = ref(false)
   const error = ref<string | null>(null)
 
-  const isAuthenticated = computed(() => !!user.value)
+  const isAuthenticated = computed(() => !!user.value && !!token.value)
   const isEmailVerified = computed(() => !!user.value?.email_verified_at)
   const userTimezone = computed(() => user.value?.timezone || 'UTC')
   const userLocale = computed(() => user.value?.locale || 'ru')
@@ -29,6 +48,9 @@ export const useAuthStore = defineStore('auth', () => {
       return user.value
     } catch {
       user.value = null
+      token.value = null
+      localStorage.removeItem(TOKEN_KEY)
+      setAuthHeader(null)
       return null
     }
   }
@@ -42,7 +64,14 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       const response = await apiClient.post(endpoints.auth.login, { email, password })
-      user.value = response.data.data.user
+      const data = response.data.data
+      
+      // Сохраняем токен
+      token.value = data.token
+      localStorage.setItem(TOKEN_KEY, data.token)
+      setAuthHeader(data.token)
+      
+      user.value = data.user
 
       // Применить тему из профиля
       const uiStore = useUIStore()
@@ -76,7 +105,14 @@ export const useAuthStore = defineStore('auth', () => {
         password,
         password_confirmation: password_confirmation || password,
       })
-      user.value = response.data.data.user
+      const data = response.data.data
+      
+      // Сохраняем токен
+      token.value = data.token
+      localStorage.setItem(TOKEN_KEY, data.token)
+      setAuthHeader(data.token)
+      
+      user.value = data.user
       return { success: true }
     } catch (err: any) {
       error.value = err.response?.data?.error?.message || 'Ошибка регистрации'
@@ -99,6 +135,9 @@ export const useAuthStore = defineStore('auth', () => {
       // Игнорируем ошибки при логауте
     } finally {
       user.value = null
+      token.value = null
+      localStorage.removeItem(TOKEN_KEY)
+      setAuthHeader(null)
     }
   }
 
