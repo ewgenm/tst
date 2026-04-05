@@ -59,8 +59,16 @@ export const useHabitsStore = defineStore('habits', () => {
 
   async function fetchHabitStats(habitId: number) {
     const response = await apiClient.get(endpoints.habitStats(habitId))
-    completions.value[habitId] = response.data.data.completions || []
-    return response.data.data
+    const data = response.data.data
+    // API returns completions_last_30_days as array of date strings
+    const completionDates = data.completions_last_30_days || []
+    completions.value[habitId] = completionDates.map((date: string) => ({
+      habit_id: habitId,
+      completed_date: date,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }))
+    return data
   }
 
   function isCompletedOnDate(habitId: number, date: string): boolean {
