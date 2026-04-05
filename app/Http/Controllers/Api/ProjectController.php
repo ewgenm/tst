@@ -180,7 +180,11 @@ class ProjectController extends Controller
             abort(403, 'Только владелец может восстановить проект');
         }
 
+        // Restore soft delete if applicable
         $projectModel->restore();
+        
+        // Set is_archived to false
+        $projectModel->update(['is_archived' => false]);
 
         return new ProjectResource($projectModel);
     }
