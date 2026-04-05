@@ -74,7 +74,17 @@ async function saveProjectSettings() {
 async function archiveProject() {
   if (!confirm('Архивировать проект?')) return
   await projectsStore.archiveProject(projectId.value)
-  router.push('/projects')
+  showToast('Проект архивирован', 'success')
+  await projectsStore.fetchProject(projectId.value)
+}
+
+const isArchived = computed(() => projectsStore.currentProject?.is_archived)
+
+async function restoreProject() {
+  if (!confirm('Разархивировать проект?')) return
+  await projectsStore.restoreProject(projectId.value)
+  await projectsStore.fetchProject(projectId.value)
+  showToast('Проект восстановлен', 'success')
 }
 
 async function deleteProject() {
@@ -308,8 +318,10 @@ async function handleTaskDeleted(id: number) {
 
     <!-- Вкладка: Настройки -->
     <div v-if="activeTab === 'settings' && isOwner" class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 p-6 space-y-4">
-      <h2 class="text-lg font-semibold">Опасные действия</h2>
-      <div class="flex items-center justify-between p-4 border border-amber-200 dark:border-amber-800 rounded-lg bg-amber-50 dark:bg-amber-900/20">
+      <h2 class="text-lg font-semibold">Управление проектом</h2>
+
+      <!-- Архивировать / Разархивировать -->
+      <div v-if="!isArchived" class="flex items-center justify-between p-4 border border-amber-200 dark:border-amber-800 rounded-lg bg-amber-50 dark:bg-amber-900/20">
         <div>
           <h3 class="font-medium">Архивировать проект</h3>
           <p class="text-sm text-gray-500">Проект будет скрыт из основного списка</p>
@@ -318,6 +330,17 @@ async function handleTaskDeleted(id: number) {
           Архивировать
         </button>
       </div>
+      <div v-else class="flex items-center justify-between p-4 border border-green-200 dark:border-green-800 rounded-lg bg-green-50 dark:bg-green-900/20">
+        <div>
+          <h3 class="font-medium">Разархивировать проект</h3>
+          <p class="text-sm text-gray-500">Проект снова появится в основном списке</p>
+        </div>
+        <button @click="restoreProject" class="px-4 py-2 border border-green-500 text-green-600 rounded-lg hover:bg-green-100 dark:hover:bg-green-900/30">
+          Разархивировать
+        </button>
+      </div>
+
+      <!-- Удалить -->
       <div class="flex items-center justify-between p-4 border border-red-200 dark:border-red-800 rounded-lg bg-red-50 dark:bg-red-900/20">
         <div>
           <h3 class="font-medium">Удалить проект</h3>
