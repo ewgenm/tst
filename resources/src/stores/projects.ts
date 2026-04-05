@@ -119,6 +119,10 @@ export const useProjectsStore = defineStore('projects', () => {
       await apiClient.post(endpoints.projectArchive(id))
       const project = projects.value.find(p => p.id === id)
       if (project) project.is_archived = true
+      // Обновляем текущий проект если он совпадает
+      if (currentProject.value?.id === id) {
+        currentProject.value.is_archived = true
+      }
       useUIStore().showToast('Проект архивирован', 'success')
     } catch (error: any) {
       useUIStore().showToast('Не удалось архивировать проект', 'error')
@@ -128,10 +132,17 @@ export const useProjectsStore = defineStore('projects', () => {
 
   async function restoreProject(id: number) {
     try {
-      await apiClient.post(endpoints.projectRestore(id))
+      const response = await apiClient.post(endpoints.projectRestore(id))
+      // Обновляем список проектов
       const project = projects.value.find(p => p.id === id)
       if (project) { project.is_archived = false; project.deleted_at = null }
+      // Обновляем текущий проект если он совпадает
+      if (currentProject.value?.id === id) {
+        currentProject.value.is_archived = false
+        currentProject.value.deleted_at = null
+      }
       useUIStore().showToast('Проект восстановлен', 'success')
+      return response.data.data
     } catch (error: any) {
       useUIStore().showToast('Не удалось восстановить проект', 'error')
       throw error
