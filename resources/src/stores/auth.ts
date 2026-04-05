@@ -65,12 +65,17 @@ export const useAuthStore = defineStore('auth', () => {
   // ============================================================
   // Регистрация
   // ============================================================
-  async function register(name: string, email: string, password: string) {
+  async function register(name: string, email: string, password: string, password_confirmation?: string) {
     isLoading.value = true
     error.value = null
 
     try {
-      const response = await apiClient.post(endpoints.auth.register, { name, email, password })
+      const response = await apiClient.post(endpoints.auth.register, {
+        name,
+        email,
+        password,
+        password_confirmation: password_confirmation || password,
+      })
       user.value = response.data.data.user
       return { success: true }
     } catch (err: any) {

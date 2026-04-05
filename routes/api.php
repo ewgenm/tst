@@ -34,8 +34,7 @@ Route::prefix('v1')->group(function () {
     Route::prefix('auth')->group(function () {
         Route::post('/register', [AuthController::class, 'register'])
             ->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
-        Route::post('/login', [AuthController::class, 'login'])
-            ->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
+        Route::post('/login', [AuthController::class, 'login']);
         Route::get('/verify/{id}/{hash}', function ($id, $hash) {
             $user = \App\Models\User::findOrFail($id);
             if (!hash_equals(sha1($user->getEmailForVerification()), $hash)) {

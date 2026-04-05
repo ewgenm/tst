@@ -51,8 +51,9 @@ class AuthController extends Controller
             $request->validated('password')
         );
 
-        // Для Sanctum SPA аутентификации достаточно создать сессию
-        // Токен не возвращается явно, используется cookie
+        // Создаём сессию для Sanctum SPA аутентификации
+        \Illuminate\Support\Facades\Auth::guard('web')->login($user);
+        $request->session()->regenerate();
 
         return response()->json([
             'success' => true,
