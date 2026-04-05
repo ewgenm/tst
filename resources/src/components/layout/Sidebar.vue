@@ -34,8 +34,8 @@ async function handleLogout() {
 
 <template>
   <aside
-    class="w-64 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-300"
-    :class="{ 'w-16': uiStore.sidebarCollapsed }"
+    class="bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-300"
+    :style="{ width: uiStore.sidebarCollapsed ? '4rem' : '16rem' }"
   >
     <!-- Logo -->
     <div class="p-4 border-b border-gray-200 dark:border-gray-700">
