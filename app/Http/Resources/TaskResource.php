@@ -31,8 +31,8 @@ class TaskResource extends BaseResource
             // Computed
             'comments_count' => $this->whenCounted('comments', 0),
             'attachments_count' => $this->whenCounted('attachments', 0),
-            'subtasks_total' => $this->getTotalSubtasksCount(),
-            'subtasks_completed' => $this->getCompletedSubtasksCount(),
+            'subtasks_total' => $this->subtasks_count ?? $this->getTotalSubtasksCount(),
+            'subtasks_completed' => $this->subtasks_completed_count ?? $this->getCompletedSubtasksCount(),
 
             // Relations
             'project' => $this->whenLoaded('project', fn () => new ProjectResource($this->project)),
