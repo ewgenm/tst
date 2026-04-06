@@ -29,7 +29,24 @@ class TaskController extends Controller
 
         $query = Task::query()
             ->whereNull('parent_task_id') // Исключаем подзадачи из основного списка
-            ->where(function ($q) use ($user) {
+            ->withCount(['comments', 'attachments', 'subtasks'])
+            ->withCount(['subtasks as subtasks_completed_count' => fn ($q) => $q->where('status', 'done')])
+            ->with(['project', 'assignee', 'tags']);
+
+        // Если указан project_id - фильтруем только задачи этого проекта
+        $projectId = $request->input('filter[project_id]') ?? $request->input('project_id');
+        if ($projectId) {
+            $query->where('project_id', $projectId)
+                ->where(function ($q) use ($user) {
+                    // Проверяем что пользователь имеет доступ к проекту
+                    $q->whereHas('project', function ($pq) use ($user) {
+                        $pq->where('owner_id', $user->id)
+                            ->orWhereHas('activeMembers', fn ($m) => $m->where('user_id', $user->id));
+                    });
+                });
+        } else {
+            // Без фильтра project_id - показываем inbox + задачи из доступных проектов
+            $query->where(function ($q) use ($user) {
                 // Inbox tasks
                 $q->whereNull('project_id')
                     ->where(function ($sub) use ($user) {
@@ -39,21 +56,17 @@ class TaskController extends Controller
             })
             // Or tasks in projects user can access
             ->orWhere(function ($q) use ($user) {
-                $q->whereNull('parent_task_id') // Снова исключаем подзадачи
-                    ->whereHas('project', function ($pq) use ($user) {
-                        $pq->where('owner_id', $user->id)
-                            ->orWhereHas('activeMembers', fn ($m) => $m->where('user_id', $user->id));
-                    });
-            })
-            ->withCount(['comments', 'attachments', 'subtasks'])
-            ->withCount(['subtasks as subtasks_completed_count' => fn ($q) => $q->where('status', 'done')])
-            ->with(['project', 'assignee', 'tags']);
+                $q->whereHas('project', function ($pq) use ($user) {
+                    $pq->where('owner_id', $user->id)
+                        ->orWhereHas('activeMembers', fn ($m) => $m->where('user_id', $user->id));
+                });
+            });
+        }
 
         $tasks = QueryBuilder::for($query)
             ->allowedSorts('due_at', 'priority', 'position', 'created_at')
             ->defaultSort('position')
             ->allowedFilters(
-                AllowedFilter::exact('project_id'),
                 AllowedFilter::exact('status'),
                 AllowedFilter::exact('assignee_id'),
                 AllowedFilter::exact('priority'),
