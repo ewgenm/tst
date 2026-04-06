@@ -28,6 +28,7 @@ export const endpoints = {
   // Task Relations
   taskTags: (taskId: number, tagId: number) => `/tasks/${taskId}/tags/${tagId}`,
   taskAttachments: (taskId: number) => `/tasks/${taskId}/attachments`,
+  taskMove: (taskId: number) => `/tasks/${taskId}/move`,
 
   // Task Subtasks
   taskSubtasks: (taskId: number) => `/tasks/${taskId}/subtasks`,

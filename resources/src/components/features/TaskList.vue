@@ -1,7 +1,6 @@
-<!-- TaskList с Drag & Drop (CRITICAL FIX #8) -->
+<!-- TaskList с Drag & Drop для задач и подзадач -->
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import draggable from 'vuedraggable'
+import { ref, watch, computed } from 'vue'
 import type { Task } from '@/types'
 import TaskItem from './TaskItem.vue'
 import { useTasksStore } from '@/stores/tasks'
@@ -19,31 +18,16 @@ const emit = defineEmits<{
 const tasksStore = useTasksStore()
 const { show: showToast } = useToast()
 const isDragging = ref(false)
-const dragIndex = ref(-1)
 
-// Используем props.tasks напрямую - watch для реактивности
-const localTasks = ref<Task[]>([])
+// Фильтруем только корневые задачи (без parent_task_id)
+const rootTasks = computed(() => props.tasks.filter(t => !t.parent_task_id))
+
+// Локальная копия для drag-and-drop
+const localTasks = ref<Task[]>([...rootTasks.value])
 
 watch(() => props.tasks, (newTasks) => {
-  localTasks.value = [...newTasks]
+  localTasks.value = [...newTasks.filter(t => !t.parent_task_id)]
 }, { deep: true, immediate: true })
-
-function onDragStart(index: number) {
-  dragIndex.value = index
-  isDragging.value = true
-}
-
-function onDrop(index: number) {
-  if (dragIndex.value === -1 || dragIndex.value === index) return
-  
-  // Перемещаем элемент
-  const [movedTask] = localTasks.value.splice(dragIndex.value, 1)
-  localTasks.value.splice(index, 0, movedTask)
-  
-  // Вызываем onSortEnd для сохранения на сервере
-  onSortEnd({ newIndex: index })
-  dragIndex.value = -1
-}
 
 async function handleToggle(id: number) {
   const task = props.tasks.find(t => t.id === id)
@@ -64,12 +48,63 @@ async function handleDelete(id: number) {
   }
 }
 
+// Drag & Drop для корневых задач
+const dragTaskId = ref<number | null>(null)
+const dragOverTaskId = ref<number | null>(null)
+
+function onDragStart(taskId: number) {
+  dragTaskId.value = taskId
+}
+
+function onDragOver(taskId: number, event: DragEvent) {
+  event.preventDefault()
+  dragOverTaskId.value = taskId
+}
+
+function onDragLeave() {
+  dragOverTaskId.value = null
+}
+
+async function onDrop(targetTaskId: number) {
+  if (dragTaskId.value === null || dragTaskId.value === targetTaskId) return
+
+  try {
+    // Перемещаем задачу как подзадачу целевой задачи
+    await tasksStore.moveTask(dragTaskId.value, targetTaskId)
+    showToast('Задача перемещена как подзадача', 'success')
+    await tasksStore.fetchTasks(tasksStore.filters)
+  } catch {
+    showToast('Не удалось переместить задачу', 'error')
+  }
+
+  dragTaskId.value = null
+  dragOverTaskId.value = null
+}
+
+// Перемещение в корень (на пустое место)
+async function onDropToRoot() {
+  if (dragTaskId.value === null) return
+
+  try {
+    await tasksStore.moveTask(dragTaskId.value, null)
+    showToast('Задача перемещена в корень', 'success')
+    await tasksStore.fetchTasks(tasksStore.filters)
+  } catch {
+    showToast('Не удалось переместить задачу', 'error')
+  }
+
+  dragTaskId.value = null
+  dragOverTaskId.value = null
+}
+
+// Drag & Drop для сортировки корневых задач
 async function onSortEnd(event: any) {
   isDragging.value = false
 
   const movedTask = localTasks.value[event.newIndex]
   if (!movedTask) return
 
+  // Только сортировка среди корневых задач
   const prevTask = event.newIndex > 0 ? localTasks.value[event.newIndex - 1] : null
   const nextTask = event.newIndex < localTasks.value.length - 1 ? localTasks.value[event.newIndex + 1] : null
 
@@ -90,7 +125,7 @@ async function onSortEnd(event: any) {
     await tasksStore.fetchTasks(tasksStore.filters)
   } catch {
     showToast('Не удалось обновить порядок', 'error')
-    localTasks.value = [...props.tasks]
+    localTasks.value = [...rootTasks.value]
   }
 }
 </script>
@@ -109,28 +144,29 @@ async function onSortEnd(event: any) {
     </div>
 
     <!-- Empty state -->
-    <div v-else-if="localTasks.length === 0" class="text-center py-12 text-gray-500">
+    <div v-else-if="rootTasks.length === 0" class="text-center py-12 text-gray-500">
       <svg class="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
       </svg>
       <p class="text-lg font-medium">{{ emptyMessage }}</p>
     </div>
 
-    <!-- Task list with drag handles -->
-    <div v-else class="space-y-1">
+    <!-- Task list -->
+    <div v-else class="space-y-1" @dragover.prevent @drop="onDropToRoot">
       <div
-        v-for="(task, index) in localTasks"
+        v-for="task in localTasks"
         :key="task.id"
-        class="flex items-start gap-2 group/task rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
-        :class="{ 'cursor-grabbing': isDragging }"
+        class="flex items-start gap-2 group/task rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors relative"
+        :class="{ 'bg-primary-50 dark:bg-primary-900/10': dragOverTaskId === task.id }"
+        @dragover="onDragOver(task.id, $event)"
+        @dragleave="onDragLeave"
+        @drop="onDrop(task.id)"
       >
-        <!-- Drag handle -->
+        <!-- Drag handle для сортировки -->
         <div
-          class="drag-handle flex items-center justify-center w-6 h-6 mt-1 rounded cursor-grab hover:bg-gray-100 dark:hover:bg-gray-700 opacity-40 group-hover/task:opacity-100 transition-opacity flex-shrink-0"
+          class="drag-handle flex items-center justify-center w-6 h-6 mt-1 rounded cursor-grab hover:bg-gray-100 dark:hover:bg-gray-700 opacity-0 group-hover/task:opacity-100 transition-opacity flex-shrink-0"
           draggable="true"
-          @dragstart="onDragStart(index)"
-          @dragover.prevent
-          @drop="onDrop(index)"
+          @dragstart="onDragStart(task.id)"
           title="Перетащить"
         >
           <svg class="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
@@ -138,12 +174,13 @@ async function onSortEnd(event: any) {
           </svg>
         </div>
 
-        <!-- Task item -->
+        <!-- Task Item (с вложенными подзадачами) -->
         <div class="flex-1 min-w-0">
           <TaskItem
             :task="task"
             :show-project="showProject"
             :compact="compact"
+            :is-draggable="false"
             @toggle="handleToggle"
             @click="handleClick"
             @delete="handleDelete"
@@ -153,7 +190,7 @@ async function onSortEnd(event: any) {
 
       <!-- Подсказка -->
       <div v-if="localTasks.length > 1" class="mt-2 text-xs text-gray-400 text-center">
-        💡 Перетащите за иконку ⠿ для изменения порядка
+        💡 Перетащите задачу на другую задачу чтобы сделать её подзадачей
       </div>
     </div>
   </div>

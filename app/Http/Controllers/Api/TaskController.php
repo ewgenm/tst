@@ -209,8 +209,8 @@ class TaskController extends Controller
      */
     public function storeSubtask(Request $request, int $id): JsonResponse
     {
-        $task = Task::findOrFail($id);
-        $this->authorize('update', $task);
+        $parentTask = Task::findOrFail($id);
+        $this->authorize('update', $parentTask);
 
         $validated = $request->validate([
             'title' => ['required', 'string', 'max:255'],
@@ -220,13 +220,22 @@ class TaskController extends Controller
             'due_at' => ['nullable', 'date'],
             'assignee_id' => ['nullable', 'exists:users,id'],
             'position' => ['nullable', 'integer'],
+            'parent_task_id' => ['nullable', 'integer', 'exists:tasks,id'],
         ]);
 
-        $maxPosition = $task->subtasks()->max('position') ?? 0;
-        $subtask = $task->subtasks()->create([
+        // Determine the parent task for the subtask
+        $parentTaskId = $validated['parent_task_id'] ?? $id;
+        $actualParent = Task::findOrFail($parentTaskId);
+        
+        // Prevent circular references
+        $this->checkCircularReference($actualParent, $parentTaskId);
+
+        $maxPosition = $actualParent->subtasks()->max('position') ?? 0;
+        $subtask = $actualParent->subtasks()->create([
             ...$validated,
+            'parent_task_id' => $parentTaskId,
             'created_by' => $request->user()->id,
-            'project_id' => $task->project_id,
+            'project_id' => $parentTask->project_id ?? $actualParent->project_id,
             'position' => $validated['position'] ?? $maxPosition + 1000,
         ]);
 
@@ -278,5 +287,72 @@ class TaskController extends Controller
         $subtask->delete();
 
         return response()->json(['success' => true]);
+    }
+
+    /**
+     * PATCH /api/v1/tasks/{task}/move - Move task to another parent or to root
+     */
+    public function move(Request $request, int $id): JsonResponse
+    {
+        $task = Task::findOrFail($id);
+        $this->authorize('update', $task);
+
+        $validated = $request->validate([
+            'new_parent_id' => ['nullable', 'integer', 'exists:tasks,id'],
+            'position' => ['nullable', 'integer'],
+        ]);
+
+        $newParentId = $validated['new_parent_id'] ?? null;
+
+        // Prevent moving task to itself
+        if ($newParentId === $id) {
+            return response()->json(['success' => false, 'error' => 'Cannot move task to itself'], 422);
+        }
+
+        // Check circular references
+        if ($newParentId) {
+            $newParent = Task::findOrFail($newParentId);
+            $this->checkCircularReference($newParent, $id);
+        }
+
+        // Calculate new position
+        if ($newParentId) {
+            // Moving to be a subtask of another task
+            $maxPosition = Task::where('parent_task_id', $newParentId)->max('position') ?? 0;
+            $task->update([
+                'parent_task_id' => $newParentId,
+                'position' => $validated['position'] ?? $maxPosition + 1000,
+            ]);
+        } else {
+            // Moving to root level
+            $maxPosition = Task::whereNull('parent_task_id')
+                ->where('project_id', $task->project_id)
+                ->max('position') ?? 0;
+            $task->update([
+                'parent_task_id' => null,
+                'position' => $validated['position'] ?? $maxPosition + 1000,
+            ]);
+        }
+
+        $task->load(['assignee', 'tags']);
+
+        return response()->json([
+            'success' => true,
+            'data' => new TaskResource($task),
+        ]);
+    }
+
+    /**
+     * Check for circular references in task hierarchy.
+     */
+    private function checkCircularReference(Task $parent, int $childId): void
+    {
+        $current = $parent;
+        while ($current->parent_task_id) {
+            if ($current->parent_task_id === $childId) {
+                abort(422, 'Circular reference detected: cannot make a task a subtask of its own descendant');
+            }
+            $current = Task::findOrFail($current->parent_task_id);
+        }
     }
 }

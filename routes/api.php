@@ -70,6 +70,7 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     Route::post('/tasks/{task}/restore', [TaskController::class, 'restore']);
     Route::post('/tasks/{task}/complete', [TaskController::class, 'complete']);
     Route::put('/tasks/{task}/position', [TaskController::class, 'position']);
+    Route::patch('/tasks/{task}/move', [TaskController::class, 'move']);
 
     // Task Comments
     Route::get('/tasks/{task}/comments', [CommentController::class, 'index']);

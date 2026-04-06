@@ -233,7 +233,21 @@ export const useTasksStore = defineStore('tasks', () => {
     return response.data.data
   }
 
-  async function createSubtask(taskId: number, payload: Partial<Task>) {
+  async function fetchSubtasksRecursive(taskId: number): Promise<Task[]> {
+    const subtasks = await fetchSubtasks(taskId)
+    const allSubtasks: Task[] = []
+    
+    for (const subtask of subtasks) {
+      allSubtasks.push(subtask)
+      // Recursively fetch nested subtasks
+      const nested = await fetchSubtasksRecursive(subtask.id)
+      allSubtasks.push(...nested)
+    }
+    
+    return allSubtasks
+  }
+
+  async function createSubtask(taskId: number, payload: Partial<Task> & { parent_task_id?: number }) {
     const response = await apiClient.post(endpoints.taskSubtasks(taskId), payload)
     return response.data.data
   }
@@ -257,6 +271,20 @@ export const useTasksStore = defineStore('tasks', () => {
     }
   }
 
+  /**
+   * Move a task to another parent or to root level
+   * @param taskId - ID of the task to move
+   * @param newParentId - ID of the new parent task (null for root level)
+   * @param position - Optional position in the new parent's subtasks
+   */
+  async function moveTask(taskId: number, newParentId: number | null, position?: number) {
+    const response = await apiClient.patch(endpoints.taskMove(taskId), {
+      new_parent_id: newParentId,
+      position,
+    })
+    return response.data.data
+  }
+
   return {
     tasks,
     isLoading,
@@ -275,9 +303,11 @@ export const useTasksStore = defineStore('tasks', () => {
     setupRealtime,
     // Subtasks
     fetchSubtasks,
+    fetchSubtasksRecursive,
     createSubtask,
     updateSubtask,
     deleteSubtask,
     toggleSubtask,
+    moveTask,
   }
 })

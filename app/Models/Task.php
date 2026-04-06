@@ -158,4 +158,36 @@ class Task extends Model
     {
         return $this->project_id === null;
     }
+
+    /**
+     * Get all subtasks recursively (including nested subtasks).
+     */
+    public function allSubtasks(): \Illuminate\Database\Eloquent\Collection
+    {
+        $subtasks = $this->subtasks()->with('allSubtasks')->get();
+        $all = collect();
+
+        foreach ($subtasks as $subtask) {
+            $all->push($subtask);
+            $all = $all->merge($subtask->allSubtasks());
+        }
+
+        return $all;
+    }
+
+    /**
+     * Get total subtasks count recursively.
+     */
+    public function getTotalSubtasksCount(): int
+    {
+        return $this->allSubtasks()->count();
+    }
+
+    /**
+     * Get completed subtasks count recursively.
+     */
+    public function getCompletedSubtasksCount(): int
+    {
+        return $this->allSubtasks()->where('status', TaskStatus::Done)->count();
+    }
 }
