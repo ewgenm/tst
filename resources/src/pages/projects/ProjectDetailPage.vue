@@ -110,15 +110,18 @@ function openEditTask(taskId: number) {
   showTaskForm.value = true
 }
 
-function handleTaskCreated() {
+function closeModal() {
   showTaskForm.value = false
   editingTaskId.value = null
+}
+
+function handleTaskCreated() {
+  closeModal()
   showToast('Задача создана', 'success')
 }
 
 function handleTaskUpdated() {
-  showTaskForm.value = false
-  editingTaskId.value = null
+  closeModal()
   showToast('Задача обновлена', 'success')
 }
 
@@ -127,6 +130,15 @@ async function handleTaskDeleted(id: number) {
   await tasksStore.deleteTask(id)
   showToast('Задача удалена', 'success')
 }
+
+// Закрытие модалки по Escape
+onMounted(() => {
+  const handleEscape = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && showTaskForm.value) closeModal()
+  }
+  window.addEventListener('keydown', handleEscape)
+  return () => window.removeEventListener('keydown', handleEscape)
+})
 </script>
 
 <template>
@@ -203,24 +215,58 @@ async function handleTaskDeleted(id: number) {
         </button>
       </div>
 
-      <!-- Форма создания/редактирования задачи -->
-      <div v-if="showTaskForm" class="mb-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold">{{ editingTaskId ? 'Редактировать задачу' : 'Новая задача' }}</h2>
-          <button @click="showTaskForm = false; editingTaskId = null" class="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-        <TaskForm
-          :default-data="editingTaskId ? tasksStore.tasks.find(t => t.id === editingTaskId) : undefined"
-          :project-id="projectId"
-          @created="handleTaskCreated"
-          @updated="handleTaskUpdated"
-          @cancel="showTaskForm = false; editingTaskId = null"
-        />
-      </div>
+      <!-- Модальное окно создания/редактирования задачи -->
+      <Teleport to="body">
+        <Transition
+          enter-active-class="transition duration-200 ease-out"
+          enter-from-class="opacity-0"
+          enter-to-class="opacity-100"
+          leave-active-class="transition duration-150 ease-in"
+          leave-from-class="opacity-100"
+          leave-to-class="opacity-0"
+        >
+          <div v-if="showTaskForm" class="fixed inset-0 z-50 flex items-center justify-center p-4" @click.self="closeModal">
+            <!-- Backdrop -->
+            <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+
+            <!-- Modal content -->
+            <Transition
+              enter-active-class="transition duration-200 ease-out"
+              enter-from-class="opacity-0 scale-95 translate-y-4"
+              enter-to-class="opacity-100 scale-100 translate-y-0"
+              leave-active-class="transition duration-150 ease-in"
+              leave-from-class="opacity-100 scale-100 translate-y-0"
+              leave-to-class="opacity-0 scale-95 translate-y-4"
+            >
+              <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                <!-- Modal header -->
+                <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+                  <h2 class="text-lg font-semibold">{{ editingTaskId ? 'Редактировать задачу' : 'Новая задача' }}</h2>
+                  <button
+                    @click="closeModal"
+                    class="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                  >
+                    <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+
+                <!-- Modal body -->
+                <div class="p-6">
+                  <TaskForm
+                    :default-data="editingTaskId ? tasksStore.tasks.find(t => t.id === editingTaskId) : undefined"
+                    :project-id="projectId"
+                    @created="handleTaskCreated"
+                    @updated="handleTaskUpdated"
+                    @cancel="closeModal"
+                  />
+                </div>
+              </div>
+            </Transition>
+          </div>
+        </Transition>
+      </Teleport>
 
       <!-- Список задач -->
       <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 p-4">
