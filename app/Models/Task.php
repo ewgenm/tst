@@ -162,7 +162,7 @@ class Task extends Model
     /**
      * Get all subtasks recursively (including nested subtasks).
      */
-    public function allSubtasks(): \Illuminate\Database\Eloquent\Collection
+    public function allSubtasks(): \Illuminate\Support\Collection
     {
         $subtasks = $this->subtasks()->with('allSubtasks')->get();
         $all = collect();
