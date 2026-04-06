@@ -8,6 +8,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
 import TaskList from '@/components/features/TaskList.vue'
 import TaskForm from '@/components/features/TaskForm.vue'
+import type { Task } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -100,13 +101,24 @@ async function leaveProject() {
 }
 
 // Управление задачами
+const editingTaskData = ref<Task | undefined>(undefined)
+
 function openCreateTask() {
   editingTaskId.value = null
+  editingTaskData.value = undefined
   showTaskForm.value = true
 }
 
-function openEditTask(taskId: number) {
-  editingTaskId.value = taskId
+function openEditTask(taskOrId: number | Task) {
+  if (typeof taskOrId === 'object') {
+    // Passed full task object (e.g., from subtask)
+    editingTaskId.value = taskOrId.id
+    editingTaskData.value = taskOrId
+  } else {
+    // Passed task ID, find in store
+    editingTaskId.value = taskOrId
+    editingTaskData.value = tasksStore.tasks.find(t => t.id === taskOrId)
+  }
   showTaskForm.value = true
 }
 
@@ -255,7 +267,7 @@ onMounted(() => {
                 <!-- Modal body -->
                 <div class="p-6">
                   <TaskForm
-                    :default-data="editingTaskId ? tasksStore.tasks.find(t => t.id === editingTaskId) : undefined"
+                    :default-data="editingTaskData"
                     :project-id="projectId"
                     @created="handleTaskCreated"
                     @updated="handleTaskUpdated"

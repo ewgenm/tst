@@ -10,7 +10,7 @@ interface Props { tasks: Task[]; showProject?: boolean; compact?: boolean; empty
 const props = withDefaults(defineProps<Props>(), { showProject: false, compact: false, emptyMessage: 'Нет задач', isLoading: false })
 
 const emit = defineEmits<{
-  'task-click': [id: number]
+  'task-click': [task: Task]
   'task-toggle': [id: number]
   'task-delete': [id: number]
 }>()
@@ -37,8 +37,8 @@ async function handleToggle(id: number) {
   emit('task-toggle', id)
 }
 
-function handleClick(id: number) {
-  emit('task-click', id)
+function handleClick(task: Task) {
+  emit('task-click', task)
 }
 
 async function handleDelete(id: number) {

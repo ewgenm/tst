@@ -92,8 +92,8 @@ async function handleToggle(id: number) {
   emit('toggle', id)
 }
 
-function handleClick(id: number) {
-  emit('click', id)
+function handleClick(task: Task) {
+  emit('click', task)
 }
 
 async function handleDelete(id: number) {
@@ -205,7 +205,7 @@ async function onDropToRoot() {
       </button>
 
       <!-- Контент задачи -->
-      <div class="flex-1 min-w-0 cursor-pointer" @click="handleClick(task.id)">
+      <div class="flex-1 min-w-0 cursor-pointer" @click="handleClick(task)">
         <div class="flex items-center gap-2">
           <span class="text-sm font-medium truncate" :class="statusColors[task.status]">
             {{ task.title }}
