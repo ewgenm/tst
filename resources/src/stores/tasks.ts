@@ -278,7 +278,7 @@ export const useTasksStore = defineStore('tasks', () => {
    * @param position - Optional position in the new parent's subtasks
    */
   async function moveTask(taskId: number, newParentId: number | null, position?: number) {
-    const response = await apiClient.patch(endpoints.taskMove(taskId), {
+    const response = await apiClient.post(endpoints.taskMove(taskId), {
       new_parent_id: newParentId,
       position,
     })
