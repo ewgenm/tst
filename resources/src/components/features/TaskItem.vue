@@ -8,7 +8,7 @@ import { useDateFormatter } from '@/composables/useDateFormatter'
 
 interface Props { task: Task; showProject?: boolean; compact?: boolean }
 const props = withDefaults(defineProps<Props>(), { showProject: false, compact: false })
-const emit = defineEmits<{ toggle: [id: number]; edit: [id: number]; delete: [id: number] }>()
+const emit = defineEmits<{ toggle: [id: number]; edit: [id: number]; delete: [id: number]; click: [id: number] }>()
 
 const { formatDueRelative, isOverdue } = useDateFormatter()
 
@@ -17,7 +17,7 @@ const statusColors = { todo: 'text-gray-900 dark:text-gray-100', in_progress: 't
 </script>
 
 <template>
-  <div class="group flex items-start gap-3 p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer" :class="{ 'opacity-60': task.status === 'done' }" @click="emit('edit', task.id)">
+  <div class="group flex items-start gap-3 p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer" :class="{ 'opacity-60': task.status === 'done' }" @click="emit('click', task.id); emit('edit', task.id)">
     <button @click.stop="emit('toggle', task.id)" class="mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-colors" :class="task.status === 'done' ? 'bg-green-500 border-green-500' : 'border-gray-300 dark:border-gray-600 hover:border-primary-500'">
       <svg v-if="task.status === 'done'" class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" /></svg>
     </button>
