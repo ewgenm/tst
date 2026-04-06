@@ -28,6 +28,7 @@ class TaskController extends Controller
         $user = $request->user();
 
         $query = Task::query()
+            ->whereNull('parent_task_id') // Исключаем подзадачи из основного списка
             ->where(function ($q) use ($user) {
                 // Inbox tasks
                 $q->whereNull('project_id')
@@ -37,9 +38,12 @@ class TaskController extends Controller
                     });
             })
             // Or tasks in projects user can access
-            ->orWhereHas('project', function ($q) use ($user) {
-                $q->where('owner_id', $user->id)
-                    ->orWhereHas('activeMembers', fn ($m) => $m->where('user_id', $user->id));
+            ->orWhere(function ($q) use ($user) {
+                $q->whereNull('parent_task_id') // Снова исключаем подзадачи
+                    ->whereHas('project', function ($pq) use ($user) {
+                        $pq->where('owner_id', $user->id)
+                            ->orWhereHas('activeMembers', fn ($m) => $m->where('user_id', $user->id));
+                    });
             })
             ->withCount(['comments', 'attachments', 'subtasks'])
             ->withCount(['subtasks as subtasks_completed_count' => fn ($q) => $q->where('status', 'done')])
@@ -166,5 +170,100 @@ class TaskController extends Controller
         );
 
         return new TaskResource($task->fresh());
+    }
+
+    /**
+     * GET /api/v1/tasks/{task}/subtasks
+     */
+    public function subtasks(Request $request, int $id): JsonResponse
+    {
+        $task = Task::findOrFail($id);
+        $this->authorize('view', $task);
+
+        $subtasks = $task->subtasks()
+            ->with(['assignee', 'tags'])
+            ->orderBy('position')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => TaskResource::collection($subtasks),
+        ]);
+    }
+
+    /**
+     * POST /api/v1/tasks/{task}/subtasks
+     */
+    public function storeSubtask(Request $request, int $id): JsonResponse
+    {
+        $task = Task::findOrFail($id);
+        $this->authorize('update', $task);
+
+        $validated = $request->validate([
+            'title' => ['required', 'string', 'max:255'],
+            'description' => ['nullable', 'string'],
+            'status' => ['sometimes', 'string', 'in:todo,in_progress,review,done'],
+            'priority' => ['sometimes', 'string', 'in:low,medium,high,urgent'],
+            'due_at' => ['nullable', 'date'],
+            'assignee_id' => ['nullable', 'exists:users,id'],
+            'position' => ['nullable', 'integer'],
+        ]);
+
+        $maxPosition = $task->subtasks()->max('position') ?? 0;
+        $subtask = $task->subtasks()->create([
+            ...$validated,
+            'created_by' => $request->user()->id,
+            'project_id' => $task->project_id,
+            'position' => $validated['position'] ?? $maxPosition + 1000,
+        ]);
+
+        $subtask->load(['assignee', 'tags']);
+
+        return response()->json([
+            'success' => true,
+            'data' => new TaskResource($subtask),
+        ], 201);
+    }
+
+    /**
+     * PUT /api/v1/tasks/{task}/subtasks/{subtask}
+     */
+    public function updateSubtask(Request $request, int $id, int $subtaskId): JsonResponse
+    {
+        $task = Task::findOrFail($id);
+        $subtask = $task->subtasks()->findOrFail($subtaskId);
+        $this->authorize('update', $subtask);
+
+        $validated = $request->validate([
+            'title' => ['sometimes', 'string', 'max:255'],
+            'description' => ['nullable', 'string'],
+            'status' => ['sometimes', 'string', 'in:todo,in_progress,review,done'],
+            'priority' => ['sometimes', 'string', 'in:low,medium,high,urgent'],
+            'due_at' => ['nullable', 'date'],
+            'assignee_id' => ['nullable', 'exists:users,id'],
+            'position' => ['nullable', 'integer'],
+        ]);
+
+        $subtask->update($validated);
+        $subtask->load(['assignee', 'tags']);
+
+        return response()->json([
+            'success' => true,
+            'data' => new TaskResource($subtask),
+        ]);
+    }
+
+    /**
+     * DELETE /api/v1/tasks/{task}/subtasks/{subtask}
+     */
+    public function destroySubtask(Request $request, int $id, int $subtaskId): JsonResponse
+    {
+        $task = Task::findOrFail($id);
+        $subtask = $task->subtasks()->findOrFail($subtaskId);
+        $this->authorize('delete', $subtask);
+
+        $subtask->delete();
+
+        return response()->json(['success' => true]);
     }
 }

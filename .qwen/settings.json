@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(-f *)",
-      "Bash(-h *)"
+      "Bash(-h *)",
+      "mcp__browser__browser_drag"
     ]
   },
   "$version": 3

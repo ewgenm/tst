@@ -57,6 +57,13 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     // Tasks
     Route::get('/tasks', [TaskController::class, 'index']);
     Route::post('/tasks', [TaskController::class, 'store']);
+
+    // Task Subtasks (ДО tasks/{task} для избежания конфликтов маршрутов)
+    Route::get('/tasks/{task}/subtasks', [TaskController::class, 'subtasks']);
+    Route::post('/tasks/{task}/subtasks', [TaskController::class, 'storeSubtask']);
+    Route::put('/tasks/{task}/subtasks/{subtask}', [TaskController::class, 'updateSubtask']);
+    Route::delete('/tasks/{task}/subtasks/{subtask}', [TaskController::class, 'destroySubtask']);
+
     Route::get('/tasks/{task}', [TaskController::class, 'show']);
     Route::put('/tasks/{task}', [TaskController::class, 'update']);
     Route::delete('/tasks/{task}', [TaskController::class, 'destroy']);

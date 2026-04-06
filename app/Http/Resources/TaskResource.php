@@ -19,8 +19,8 @@ class TaskResource extends BaseResource
             'parent_task_id' => $this->parent_task_id,
             'title' => $this->title,
             'description' => $this->description,
-            'status' => $this->status->value,
-            'priority' => $this->priority->value,
+            'status' => optional($this->status)->value ?? 'todo',
+            'priority' => optional($this->priority)->value ?? 'medium',
             'due_at' => $this->due_at?->toISOString(),
             'position' => $this->position,
             'assignee_id' => $this->assignee_id,
@@ -31,8 +31,8 @@ class TaskResource extends BaseResource
             // Computed
             'comments_count' => $this->whenCounted('comments', 0),
             'attachments_count' => $this->whenCounted('attachments', 0),
-            'subtasks_total' => $this->whenCounted('subtasks', 0),
-            'subtasks_completed' => $this->whenCounted('subtasks_completed', 0),
+            'subtasks_total' => $this->subtasks_count ?? $this->whenCounted('subtasks', 0),
+            'subtasks_completed' => $this->subtasks_completed_count ?? $this->whenCounted('subtasks_completed', 0),
 
             // Relations
             'project' => $this->whenLoaded('project', fn () => new ProjectResource($this->project)),

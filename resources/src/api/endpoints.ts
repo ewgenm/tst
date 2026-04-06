@@ -29,6 +29,10 @@ export const endpoints = {
   taskTags: (taskId: number, tagId: number) => `/tasks/${taskId}/tags/${tagId}`,
   taskAttachments: (taskId: number) => `/tasks/${taskId}/attachments`,
 
+  // Task Subtasks
+  taskSubtasks: (taskId: number) => `/tasks/${taskId}/subtasks`,
+  taskSubtask: (taskId: number, subId: number) => `/tasks/${taskId}/subtasks/${subId}`,
+
   // Comments
   taskComments: (taskId: number) => `/tasks/${taskId}/comments`,
   comment: (id: number) => `/comments/${id}`,

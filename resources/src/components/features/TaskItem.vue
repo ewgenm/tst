@@ -5,6 +5,7 @@ TaskItem компонент (с timezone support) — ТЗ №2 v1.1 разде�
 <script setup lang="ts">
 import type { Task } from '@/types'
 import { useDateFormatter } from '@/composables/useDateFormatter'
+import SubtaskList from './SubtaskList.vue'
 
 interface Props { task: Task; showProject?: boolean; compact?: boolean }
 const props = withDefaults(defineProps<Props>(), { showProject: false, compact: false })
@@ -36,6 +37,14 @@ const statusColors = { todo: 'text-gray-900 dark:text-gray-100', in_progress: 't
         <span v-if="task.is_recurring" title="Повторяющаяся задача">🔁</span>
         <span v-if="task.comments_count && task.comments_count > 0">💬 {{ task.comments_count }}</span>
         <span v-if="task.attachments_count && task.attachments_count > 0">📎 {{ task.attachments_count }}</span>
+        <!-- Subtasks progress -->
+        <template v-if="task.subtasks_total && task.subtasks_total > 0">
+          <SubtaskList
+            :task-id="task.id"
+            :subtasks-total="task.subtasks_total"
+            :subtasks-completed="task.subtasks_completed || 0"
+          />
+        </template>
       </div>
     </div>
     <div class="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 flex-shrink-0">

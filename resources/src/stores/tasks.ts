@@ -225,6 +225,38 @@ export const useTasksStore = defineStore('tasks', () => {
     }
   }
 
+  // ============================================================
+  // Subtasks
+  // ============================================================
+  async function fetchSubtasks(taskId: number) {
+    const response = await apiClient.get(endpoints.taskSubtasks(taskId))
+    return response.data.data
+  }
+
+  async function createSubtask(taskId: number, payload: Partial<Task>) {
+    const response = await apiClient.post(endpoints.taskSubtasks(taskId), payload)
+    return response.data.data
+  }
+
+  async function updateSubtask(taskId: number, subId: number, payload: Partial<Task>) {
+    const response = await apiClient.put(endpoints.taskSubtask(taskId, subId), payload)
+    return response.data.data
+  }
+
+  async function deleteSubtask(taskId: number, subId: number) {
+    await apiClient.delete(endpoints.taskSubtask(taskId, subId))
+  }
+
+  async function toggleSubtask(taskId: number, subId: number) {
+    const subtask = tasks.value.find(t => t.id === subId)
+    if (!subtask) return
+    if (subtask.status === 'done') {
+      await updateSubtask(taskId, subId, { status: 'todo' })
+    } else {
+      await updateSubtask(taskId, subId, { status: 'done' })
+    }
+  }
+
   return {
     tasks,
     isLoading,
@@ -241,5 +273,11 @@ export const useTasksStore = defineStore('tasks', () => {
     completeTask,
     reorderTask,
     setupRealtime,
+    // Subtasks
+    fetchSubtasks,
+    createSubtask,
+    updateSubtask,
+    deleteSubtask,
+    toggleSubtask,
   }
 })
