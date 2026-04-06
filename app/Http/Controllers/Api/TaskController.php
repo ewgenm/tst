@@ -194,7 +194,9 @@ class TaskController extends Controller
         $this->authorize('view', $task);
 
         $subtasks = $task->subtasks()
-            ->with(['assignee', 'tags'])
+            ->with(['assignee', 'tags', 'project'])
+            ->withCount(['comments', 'attachments', 'subtasks'])
+            ->withCount(['subtasks as subtasks_completed_count' => fn ($q) => $q->where('status', 'done')])
             ->orderBy('position')
             ->get();
 

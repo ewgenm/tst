@@ -3,7 +3,7 @@ TaskItem — с вложенными подзадачами, прогресс-б
 ============================================================ -->
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import type { Task } from '@/types'
 import { useDateFormatter } from '@/composables/useDateFormatter'
 import { useTasksStore } from '@/stores/tasks'
@@ -58,11 +58,14 @@ const statusColors = {
 // Вычисляемые свойства
 const progressPercent = ref(0)
 
+const subtasksTotal = computed(() => props.task.subtasks_total ?? (props.task as any).subtasks_count ?? 0)
+const subtasksCompleted = computed(() => props.task.subtasks_completed ?? (props.task as any).subtasks_completed_count ?? 0)
+
 watch(
-  () => [props.task.subtasks_total, props.task.subtasks_completed],
+  () => [subtasksTotal.value, subtasksCompleted.value],
   () => {
-    progressPercent.value = props.task.subtasks_total && props.task.subtasks_total > 0
-      ? Math.round((props.task.subtasks_completed! / props.task.subtasks_total!) * 100)
+    progressPercent.value = subtasksTotal.value > 0
+      ? Math.round((subtasksCompleted.value / subtasksTotal.value) * 100)
       : 0
   },
   { immediate: true }
@@ -181,7 +184,7 @@ async function onDropToRoot() {
 
       <!-- Кнопка разворачивания -->
       <button
-        v-if="task.subtasks_total && task.subtasks_total > 0"
+        v-if="subtasksTotal > 0"
         @click="toggleExpand"
         class="w-5 h-5 mt-1 flex items-center justify-center rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex-shrink-0"
         :title="isExpanded ? 'Свернуть' : 'Развернуть'"
@@ -211,7 +214,7 @@ async function onDropToRoot() {
         </div>
 
         <!-- Прогресс-бар подзадач -->
-        <div v-if="task.subtasks_total && task.subtasks_total > 0" class="mt-1 flex items-center gap-2">
+        <div v-if="subtasksTotal > 0" class="mt-1 flex items-center gap-2">
           <div class="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
             <div
               class="h-full bg-green-500 rounded-full transition-all"
@@ -219,7 +222,7 @@ async function onDropToRoot() {
             />
           </div>
           <span class="text-xs text-gray-500 flex-shrink-0">
-            {{ task.subtasks_completed }}/{{ task.subtasks_total }}
+            {{ subtasksCompleted }}/{{ subtasksTotal }}
           </span>
         </div>
 
